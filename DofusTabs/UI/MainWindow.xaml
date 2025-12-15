@@ -1,0 +1,201 @@
+<Window x:Class="DofusTabs.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DofusTabs" Height="600" Width="800"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
+        MinHeight="500" MinWidth="700">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Barra de menú -->
+        <Menu Grid.Row="0">
+            <MenuItem Header="Archivo">
+                <MenuItem Header="Salir" Click="ExitMenuItem_Click"/>
+            </MenuItem>
+            <MenuItem Header="Ayuda">
+                <MenuItem Header="Acerca de" Click="AboutMenuItem_Click"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- Contenido principal -->
+        <Grid Grid.Row="1" Margin="15">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Título y botón actualizar -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,15">
+                <TextBlock Text="Ventanas de Dofus detectadas:" 
+                           FontSize="14" 
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"/>
+                <Button Content="Actualizar" 
+                        Margin="15,0,0,0"
+                        Padding="10,5"
+                        Click="RefreshButton_Click"/>
+            </StackPanel>
+
+            <!-- Tabla de ventanas -->
+            <DataGrid x:Name="WindowsDataGrid" 
+                      Grid.Row="1"
+                      AutoGenerateColumns="False"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      CanUserReorderColumns="False"
+                      HeadersVisibility="Column"
+                      SelectionMode="Single"
+                      SelectionChanged="WindowsDataGrid_SelectionChanged"
+                      PreviewMouseLeftButtonDown="WindowsDataGrid_PreviewMouseLeftButtonDown"
+                      PreviewMouseMove="WindowsDataGrid_PreviewMouseMove"
+                      Drop="WindowsDataGrid_Drop"
+                      AllowDrop="True"
+                      Margin="0,0,0,15"
+                      GridLinesVisibility="All"
+                      BorderThickness="1"
+                      BorderBrush="#CCCCCC">
+                <DataGrid.Columns>
+                    <!-- Columna Checkbox -->
+                    <DataGridTemplateColumn Header="" Width="Auto" MinWidth="40">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay}" 
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Click="CheckBox_Click"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <!-- Columna Clase -->
+                    <DataGridTextColumn Header="Clase" 
+                                        Binding="{Binding CharacterClass}" 
+                                        Width="*"
+                                        MinWidth="100"
+                                        IsReadOnly="True"/>
+
+                    <!-- Columna Nombre -->
+                    <DataGridTextColumn Header="Nombre" 
+                                        Binding="{Binding CharacterName}" 
+                                        Width="*"
+                                        MinWidth="150"
+                                        IsReadOnly="True"/>
+
+                    <!-- Columna Atajo de teclado -->
+                    <DataGridTemplateColumn Header="Atajo" Width="*" MinWidth="200">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBox Text="{Binding IndividualHotkey, Mode=TwoWay}" 
+                                         IsReadOnly="True"
+                                         Padding="5"
+                                         VerticalContentAlignment="Center"
+                                         Tag="{Binding}"
+                                         GotFocus="IndividualHotkeyTextBox_GotFocus"
+                                         LostFocus="IndividualHotkeyTextBox_LostFocus"
+                                         KeyDown="IndividualHotkeyTextBox_KeyDown"
+                                         HorizontalAlignment="Stretch"
+                                         HorizontalContentAlignment="Right"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- Configuración de atajos de teclado -->
+            <Border Grid.Row="2" 
+                    BorderBrush="#CCCCCC" 
+                    BorderThickness="1" 
+                    Background="#F9F9F9"
+                    Padding="15"
+                    CornerRadius="3">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" 
+                               Text="Atajos de teclado:" 
+                               FontWeight="SemiBold"
+                               FontSize="12"
+                               Margin="0,0,0,10"/>
+
+                    <!-- Atajo siguiente ventana -->
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" 
+                                   Text="Siguiente ventana:" 
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"/>
+                        <TextBox x:Name="NextHotkeyTextBox" 
+                                 Grid.Column="1"
+                                 IsReadOnly="True"
+                                 KeyDown="NextHotkeyTextBox_KeyDown"
+                                 GotFocus="HotkeyTextBox_GotFocus"
+                                 LostFocus="HotkeyTextBox_LostFocus"
+                                 Padding="5"
+                                 VerticalContentAlignment="Center"/>
+                        <Button Grid.Column="2" 
+                                Content="Limpiar" 
+                                Margin="10,0,0,0"
+                                Padding="8,3"
+                                Click="ClearNextHotkeyButton_Click"/>
+                    </Grid>
+
+                    <!-- Atajo ventana anterior -->
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" 
+                                   Text="Ventana anterior:" 
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"/>
+                        <TextBox x:Name="PreviousHotkeyTextBox" 
+                                 Grid.Column="1"
+                                 IsReadOnly="True"
+                                 KeyDown="PreviousHotkeyTextBox_KeyDown"
+                                 GotFocus="HotkeyTextBox_GotFocus"
+                                 LostFocus="HotkeyTextBox_LostFocus"
+                                 Padding="5"
+                                 VerticalContentAlignment="Center"/>
+                        <Button Grid.Column="2" 
+                                Content="Limpiar" 
+                                Margin="10,0,0,0"
+                                Padding="8,3"
+                                Click="ClearPreviousHotkeyButton_Click"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Barra de estado -->
+        <StatusBar Grid.Row="2" Background="#F0F0F0">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusTextBlock" 
+                           Text="Listo" 
+                           Margin="5,0"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock x:Name="WindowsCountTextBlock" 
+                           Text="0 ventanas detectadas" 
+                           Margin="5,0"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>
+
