@@ -19,15 +19,71 @@ namespace DofusTabs.UI
         private WindowInfo? _currentCapturingWindow = null;
         private WindowInfo? _draggedWindow = null;
         private System.Windows.Point _dragStartPoint;
+        private OverlayWindow? _overlayWindow;
 
         public MainWindow()
         {
             InitializeComponent();
             _windowManager = new WindowManager();
             InitializeHotkeys();
+            InitializeOverlay();
+            
+            // Cargar configuración después de que la ventana esté cargada
+            Loaded += MainWindow_Loaded;
+        }
+
+        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        {
             LoadSettings();
             RefreshWindowsList();
             UpdateHotkeyDisplay();
+            
+            // Re-registrar todos los atajos después de cargar la configuración
+            if (_hotkeyManager != null)
+            {
+                _hotkeyManager.ReRegisterHotkeys();
+            }
+        }
+
+        private void InitializeOverlay()
+        {
+            _overlayWindow = new OverlayWindow();
+            _overlayWindow.LoadPosition();
+            _overlayWindow.Hide();
+        }
+
+        private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlayWindow == null)
+            {
+                InitializeOverlay();
+            }
+
+            if (_overlayWindow != null)
+            {
+                if (_overlayWindow.IsVisible)
+                {
+                    _overlayWindow.Hide();
+                    ToggleOverlayButton.Content = "Mostrar Overlay";
+                }
+                else
+                {
+                    _overlayWindow.Show();
+                    _overlayWindow.Topmost = true;
+                    // Pasar la lista actual de la tabla para garantizar el mismo orden
+                    var currentWindows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
+                    if (currentWindows != null)
+                    {
+                        var windowsList = currentWindows.Cast<WindowInfo>().ToList();
+                        _overlayWindow.RefreshWindowsList(windowsList);
+                    }
+                    else
+                    {
+                        _overlayWindow.RefreshWindowsList();
+                    }
+                    ToggleOverlayButton.Content = "Ocultar Overlay";
+                }
+            }
         }
 
         private void LoadSettings()
@@ -153,7 +209,9 @@ namespace DofusTabs.UI
                 }
             }
 
-            WindowsDataGrid.ItemsSource = windows;
+            // Ordenar explícitamente por DisplayOrder para asegurar el mismo orden que el overlay
+            var sortedWindows = windows.OrderBy(w => w.DisplayOrder).ToList();
+            WindowsDataGrid.ItemsSource = sortedWindows;
             var enabledCount = windows.Count(w => w.IsEnabled);
             WindowsCountTextBlock.Text = $"{windows.Count} ventanas detectadas ({enabledCount} habilitadas)";
 
@@ -164,6 +222,12 @@ namespace DofusTabs.UI
             else
             {
                 StatusTextBlock.Text = "Listo";
+            }
+
+            // Actualizar overlay con la misma lista ordenada
+            if (_overlayWindow != null && _overlayWindow.IsVisible)
+            {
+                _overlayWindow.RefreshWindowsList(sortedWindows);
             }
 
             // Guardar configuración
@@ -258,6 +322,20 @@ namespace DofusTabs.UI
                 windowInfo.IsEnabled = checkBox.IsChecked ?? true;
                 var enabledCount = _windowManager.GetDofusWindows().Count(w => w.IsEnabled);
                 StatusTextBlock.Text = $"{enabledCount} ventana(s) habilitada(s)";
+                
+                // Actualizar overlay si está visible con la lista actualizada
+                if (_overlayWindow != null && _overlayWindow.IsVisible)
+                {
+                    var currentWindows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
+                    if (currentWindows != null)
+                    {
+                        var windowsList = currentWindows.Cast<WindowInfo>().ToList();
+                        _overlayWindow.RefreshWindowsList(windowsList);
+                    }
+                }
+                
+                // Guardar configuración
+                SaveSettings();
             }
         }
 
@@ -415,6 +493,13 @@ namespace DofusTabs.UI
 
                                 // Refrescar la lista manteniendo el orden
                                 RefreshWindowsList();
+
+                                // Sincronizar overlay con el nuevo orden
+                                if (_overlayWindow != null && _overlayWindow.IsVisible)
+                                {
+                                    _overlayWindow.RefreshWindowsList(windowsList);
+                                }
+                                
                                 StatusTextBlock.Text = $"Orden actualizado: {_draggedWindow.CharacterName} movido a posición {targetIndex + 1}";
                             }
                         }
@@ -587,6 +672,7 @@ namespace DofusTabs.UI
         {
             SaveSettings();
             _hotkeyManager?.Dispose();
+            _overlayWindow?.Close();
             base.OnClosed(e);
         }
     }
