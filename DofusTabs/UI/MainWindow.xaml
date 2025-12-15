@@ -55,6 +55,7 @@
                       PreviewMouseLeftButtonDown="WindowsDataGrid_PreviewMouseLeftButtonDown"
                       PreviewMouseMove="WindowsDataGrid_PreviewMouseMove"
                       Drop="WindowsDataGrid_Drop"
+                      DragOver="WindowsDataGrid_DragOver"
                       AllowDrop="True"
                       Margin="0,0,0,15"
                       GridLinesVisibility="All"
@@ -69,6 +70,21 @@
                                           HorizontalAlignment="Center"
                                           VerticalAlignment="Center"
                                           Click="CheckBox_Click"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
+                    <!-- Columna Icono -->
+                    <DataGridTemplateColumn Header="" Width="Auto" MinWidth="50">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Image Source="{Binding IconPath}" 
+                                       Width="32" 
+                                       Height="32"
+                                       Stretch="Uniform"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="5,0"/>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
@@ -88,19 +104,32 @@
                                         IsReadOnly="True"/>
 
                     <!-- Columna Atajo de teclado -->
-                    <DataGridTemplateColumn Header="Atajo" Width="*" MinWidth="200">
+                    <DataGridTemplateColumn Header="Atajo" Width="*" MinWidth="250">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBox Text="{Binding IndividualHotkey, Mode=TwoWay}" 
-                                         IsReadOnly="True"
-                                         Padding="5"
-                                         VerticalContentAlignment="Center"
-                                         Tag="{Binding}"
-                                         GotFocus="IndividualHotkeyTextBox_GotFocus"
-                                         LostFocus="IndividualHotkeyTextBox_LostFocus"
-                                         KeyDown="IndividualHotkeyTextBox_KeyDown"
-                                         HorizontalAlignment="Stretch"
-                                         HorizontalContentAlignment="Right"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0"
+                                             Text="{Binding IndividualHotkey, Mode=TwoWay}" 
+                                             IsReadOnly="True"
+                                             Padding="5"
+                                             VerticalContentAlignment="Center"
+                                             Tag="{Binding}"
+                                             GotFocus="IndividualHotkeyTextBox_GotFocus"
+                                             LostFocus="IndividualHotkeyTextBox_LostFocus"
+                                             KeyDown="IndividualHotkeyTextBox_KeyDown"
+                                             HorizontalAlignment="Stretch"
+                                             HorizontalContentAlignment="Right"
+                                             Margin="0,0,5,0"/>
+                                    <Button Grid.Column="1"
+                                            Content="Limpiar"
+                                            Padding="8,3"
+                                            Click="ClearIndividualHotkeyButton_Click"
+                                            Tag="{Binding}"/>
+                                </Grid>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
