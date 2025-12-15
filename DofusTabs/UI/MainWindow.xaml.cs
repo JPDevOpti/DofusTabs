@@ -375,6 +375,15 @@ namespace DofusTabs.UI
             }
         }
 
+        private void WindowsDataGrid_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(typeof(WindowInfo)))
+            {
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+            }
+        }
+
         private void WindowsDataGrid_Drop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(typeof(WindowInfo)) && _draggedWindow != null)
@@ -384,27 +393,32 @@ namespace DofusTabs.UI
                 {
                     var targetRow = FindParent<System.Windows.Controls.DataGridRow>(source);
                     if (targetRow != null && targetRow.Item is WindowInfo targetWindow && targetWindow != _draggedWindow)
-                {
-                    var windows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
-                    if (windows != null)
                     {
-                        var windowsList = windows.Cast<WindowInfo>().ToList();
-                        int draggedIndex = windowsList.IndexOf(_draggedWindow);
-                        int targetIndex = windowsList.IndexOf(targetWindow);
-
-                        if (draggedIndex >= 0 && targetIndex >= 0)
+                        var windows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
+                        if (windows != null)
                         {
-                            // Intercambiar el orden
-                            int tempOrder = _draggedWindow.DisplayOrder;
-                            _draggedWindow.DisplayOrder = targetWindow.DisplayOrder;
-                            targetWindow.DisplayOrder = tempOrder;
+                            var windowsList = windows.Cast<WindowInfo>().OrderBy(w => w.DisplayOrder).ToList();
+                            int draggedIndex = windowsList.IndexOf(_draggedWindow);
+                            int targetIndex = windowsList.IndexOf(targetWindow);
 
-                            // Refrescar la lista manteniendo el orden
-                            RefreshWindowsList();
-                            StatusTextBlock.Text = $"Orden actualizado: {_draggedWindow.CharacterName} movido";
+                            if (draggedIndex >= 0 && targetIndex >= 0)
+                            {
+                                // Mover el elemento arrastrado a la nueva posición
+                                windowsList.RemoveAt(draggedIndex);
+                                windowsList.Insert(targetIndex, _draggedWindow);
+
+                                // Reasignar DisplayOrder secuencialmente
+                                for (int i = 0; i < windowsList.Count; i++)
+                                {
+                                    windowsList[i].DisplayOrder = i;
+                                }
+
+                                // Refrescar la lista manteniendo el orden
+                                RefreshWindowsList();
+                                StatusTextBlock.Text = $"Orden actualizado: {_draggedWindow.CharacterName} movido a posición {targetIndex + 1}";
+                            }
                         }
                     }
-                }
                 }
                 _draggedWindow = null;
             }
@@ -530,6 +544,28 @@ namespace DofusTabs.UI
         {
             PreviousHotkeyTextBox.Text = "Ninguno";
             StatusTextBlock.Text = "Atajo eliminado. Configura uno nuevo haciendo clic en el campo.";
+        }
+
+        private void ClearIndividualHotkeyButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button button && button.Tag is WindowInfo windowInfo)
+            {
+                // Desregistrar el atajo
+                if (_hotkeyManager != null)
+                {
+                    _hotkeyManager.UnregisterIndividualHotkey(windowInfo.ProcessId);
+                }
+
+                // Limpiar el atajo
+                windowInfo.IndividualHotkey = string.Empty;
+                
+                // Actualizar la interfaz
+                RefreshWindowsList();
+                StatusTextBlock.Text = $"Atajo eliminado para {windowInfo.CharacterName}";
+                
+                // Guardar configuración
+                SaveSettings();
+            }
         }
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -119,12 +120,15 @@ namespace DofusTabs.Core
         public bool SwitchToNextWindow()
         {
             var windows = GetDofusWindows();
-            var enabledWindows = windows.Where(w => w.IsEnabled).ToList();
+            // Ordenar por DisplayOrder y filtrar solo las habilitadas
+            var enabledWindows = windows.Where(w => w.IsEnabled)
+                                       .OrderBy(w => w.DisplayOrder)
+                                       .ToList();
             
             if (enabledWindows.Count == 0)
                 return false;
 
-            // Encontrar la ventana actual en la lista de habilitadas
+            // Encontrar la ventana actual en la lista de habilitadas ordenadas
             var currentWindow = _currentWindowIndex >= 0 && _currentWindowIndex < windows.Count 
                 ? windows[_currentWindowIndex] 
                 : null;
@@ -144,12 +148,15 @@ namespace DofusTabs.Core
         public bool SwitchToPreviousWindow()
         {
             var windows = GetDofusWindows();
-            var enabledWindows = windows.Where(w => w.IsEnabled).ToList();
+            // Ordenar por DisplayOrder y filtrar solo las habilitadas
+            var enabledWindows = windows.Where(w => w.IsEnabled)
+                                       .OrderBy(w => w.DisplayOrder)
+                                       .ToList();
             
             if (enabledWindows.Count == 0)
                 return false;
 
-            // Encontrar la ventana actual en la lista de habilitadas
+            // Encontrar la ventana actual en la lista de habilitadas ordenadas
             var currentWindow = _currentWindowIndex >= 0 && _currentWindowIndex < windows.Count 
                 ? windows[_currentWindowIndex] 
                 : null;
@@ -250,6 +257,75 @@ namespace DofusTabs.Core
 
                 string[] parts = Title.Split(new[] { " - " }, StringSplitOptions.RemoveEmptyEntries);
                 return parts.Length > 1 ? parts[1] : string.Empty;
+            }
+        }
+
+        public string IconPath
+        {
+            get
+            {
+                var className = CharacterClass;
+                if (string.IsNullOrEmpty(className))
+                    return string.Empty;
+
+                // Normalizar el nombre de la clase para buscar el icono
+                className = className.Trim();
+                
+                // Mapeo de nombres de clases a archivos de iconos
+                var iconMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "Aniripsa", "Aniripsa.jpg" },
+                    { "Anutrof", "Anutrof.jpg" },
+                    { "Feca", "Feca.jpg" },
+                    { "Forjalanza", "Forjalanza.png" },
+                    { "Hipermago", "Hipermago.jpg" },
+                    { "Ocra", "Ocra.jpg" },
+                    { "Osamodas", "Osamodas.jpg" },
+                    { "Pandawa", "Pandawa.jpg" },
+                    { "Sacrígido", "Sacrgrito.jpg" },
+                    { "Sacrigido", "Sacrgrito.jpg" },
+                    { "Sadida", "Sadida.jpg" },
+                    { "Selotrop", "Selotrop.jpg" },
+                    { "Sram", "Sram.jpg" },
+                    { "Steamer", "Steamer.jpg" },
+                    { "Tymador", "Tymador.jpg" },
+                    { "Uginak", "Uginak.jpg" },
+                    { "Xelor", "Xelor.jpg" },
+                    { "Yopuka", "Yopuka.jpg" },
+                    { "Zobal", "Zobal.jpg" },
+                    { "Zurcar", "Zurcar.jpg" }
+                };
+
+                if (iconMapping.TryGetValue(className, out var iconFile))
+                {
+                    // Intentar varias rutas posibles
+                    var possiblePaths = new List<string>();
+                    
+                    // Ruta relativa desde el directorio de trabajo
+                    possiblePaths.Add(System.IO.Path.Combine("Resources", "Icons", iconFile));
+                    
+                    // Ruta desde el directorio de la aplicación
+                    var appDirectory = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    if (appDirectory != null)
+                    {
+                        possiblePaths.Add(System.IO.Path.Combine(appDirectory, "Resources", "Icons", iconFile));
+                    }
+                    
+                    // Ruta desde el directorio base del proyecto (para desarrollo)
+                    var baseDirectory = System.IO.Directory.GetCurrentDirectory();
+                    possiblePaths.Add(System.IO.Path.Combine(baseDirectory, "Resources", "Icons", iconFile));
+                    possiblePaths.Add(System.IO.Path.Combine(baseDirectory, "DofusTabs", "Resources", "Icons", iconFile));
+                    
+                    foreach (var path in possiblePaths)
+                    {
+                        if (System.IO.File.Exists(path))
+                        {
+                            return System.IO.Path.GetFullPath(path);
+                        }
+                    }
+                }
+
+                return string.Empty;
             }
         }
 

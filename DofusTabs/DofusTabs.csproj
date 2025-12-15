@@ -20,5 +20,19 @@
     <Folder Include="Resources\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="Resources\Icons\*.jpg" />
+    <Resource Include="Resources\Icons\*.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Resources\Icons\*.jpg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Resources\Icons\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
 
