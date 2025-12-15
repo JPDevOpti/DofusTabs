@@ -128,16 +128,16 @@ namespace DofusTabs.Core
             if (enabledWindows.Count == 0)
                 return false;
 
-            // Encontrar la ventana actual en la lista de habilitadas ordenadas
-            var currentWindow = _currentWindowIndex >= 0 && _currentWindowIndex < windows.Count 
-                ? windows[_currentWindowIndex] 
-                : null;
+            // Obtener la ventana activa actual del sistema
+            IntPtr activeHandle = GetForegroundWindow();
+            var currentWindow = enabledWindows.FirstOrDefault(w => w.Handle == activeHandle);
             
-            int currentEnabledIndex = currentWindow != null && currentWindow.IsEnabled
-                ? enabledWindows.IndexOf(currentWindow)
-                : -1;
+            // Si no encontramos la ventana actual, usar la primera
+            int currentIndex = currentWindow != null 
+                ? enabledWindows.IndexOf(currentWindow) 
+                : 0;
 
-            int nextIndex = (currentEnabledIndex + 1) % enabledWindows.Count;
+            int nextIndex = (currentIndex + 1) % enabledWindows.Count;
             var nextWindow = enabledWindows[nextIndex];
             
             // Encontrar el índice real en la lista completa
@@ -156,16 +156,16 @@ namespace DofusTabs.Core
             if (enabledWindows.Count == 0)
                 return false;
 
-            // Encontrar la ventana actual en la lista de habilitadas ordenadas
-            var currentWindow = _currentWindowIndex >= 0 && _currentWindowIndex < windows.Count 
-                ? windows[_currentWindowIndex] 
-                : null;
+            // Obtener la ventana activa actual del sistema
+            IntPtr activeHandle = GetForegroundWindow();
+            var currentWindow = enabledWindows.FirstOrDefault(w => w.Handle == activeHandle);
             
-            int currentEnabledIndex = currentWindow != null && currentWindow.IsEnabled
-                ? enabledWindows.IndexOf(currentWindow)
-                : -1;
+            // Si no encontramos la ventana actual, usar la última
+            int currentIndex = currentWindow != null 
+                ? enabledWindows.IndexOf(currentWindow) 
+                : enabledWindows.Count - 1;
 
-            int nextIndex = (currentEnabledIndex - 1 + enabledWindows.Count) % enabledWindows.Count;
+            int nextIndex = (currentIndex - 1 + enabledWindows.Count) % enabledWindows.Count;
             var nextWindow = enabledWindows[nextIndex];
             
             // Encontrar el índice real en la lista completa
@@ -195,7 +195,8 @@ namespace DofusTabs.Core
         public WindowInfo? GetCurrentActiveWindow()
         {
             IntPtr activeHandle = GetForegroundWindow();
-            return _dofusWindows.FirstOrDefault(w => w.Handle == activeHandle);
+            var windows = GetDofusWindows();
+            return windows.FirstOrDefault(w => w.Handle == activeHandle);
         }
     }
 

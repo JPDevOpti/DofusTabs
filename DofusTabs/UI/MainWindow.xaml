@@ -30,7 +30,7 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Título y botón actualizar -->
+            <!-- Título y botones -->
             <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,15">
                 <TextBlock Text="Ventanas de Dofus detectadas:" 
                            FontSize="14" 
@@ -40,6 +40,11 @@
                         Margin="15,0,0,0"
                         Padding="10,5"
                         Click="RefreshButton_Click"/>
+                <Button x:Name="ToggleOverlayButton"
+                        Content="Mostrar Overlay" 
+                        Margin="10,0,0,0"
+                        Padding="10,5"
+                        Click="ToggleOverlayButton_Click"/>
             </StackPanel>
 
             <!-- Tabla de ventanas -->
@@ -49,6 +54,7 @@
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"
                       CanUserReorderColumns="False"
+                      CanUserSortColumns="False"
                       HeadersVisibility="Column"
                       SelectionMode="Single"
                       SelectionChanged="WindowsDataGrid_SelectionChanged"

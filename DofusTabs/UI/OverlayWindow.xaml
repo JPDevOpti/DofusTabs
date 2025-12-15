@@ -1,0 +1,53 @@
+<Window x:Class="DofusTabs.UI.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DofusTabs Overlay" 
+        SizeToContent="WidthAndHeight"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+    <Border Background="#F0F0F0" 
+            BorderBrush="#CCCCCC" 
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="6"
+            Cursor="Hand">
+        <ItemsControl x:Name="CharactersList">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border x:Name="CharacterBorder"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="4,3"
+                            Margin="0,1,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <Image Grid.Column="0"
+                                   Source="{Binding IconPath}"
+                                   Width="24"
+                                   Height="24"
+                                   Margin="0,0,6,0"
+                                   Stretch="Uniform"/>
+                            
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding CharacterName}"
+                                       FontSize="11"
+                                       Foreground="#333333"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Border>
+</Window>
+

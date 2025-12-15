@@ -66,16 +66,28 @@ namespace DofusTabs.Core
 
         public void UpdateNextHotkey(ModifierKeys modifiers, Key key)
         {
-            UnregisterHotKey(_windowHandle, HOTKEY_ID_NEXT);
+            if (_windowHandle != IntPtr.Zero)
+            {
+                UnregisterHotKey(_windowHandle, HOTKEY_ID_NEXT);
+            }
             _nextHotkey = new HotkeyConfig { Modifiers = modifiers, Key = key };
-            RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+            if (_windowHandle != IntPtr.Zero)
+            {
+                RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+            }
         }
 
         public void UpdatePreviousHotkey(ModifierKeys modifiers, Key key)
         {
-            UnregisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS);
+            if (_windowHandle != IntPtr.Zero)
+            {
+                UnregisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS);
+            }
             _previousHotkey = new HotkeyConfig { Modifiers = modifiers, Key = key };
-            RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+            if (_windowHandle != IntPtr.Zero)
+            {
+                RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+            }
         }
 
         private uint GetModifiersValue(ModifierKeys modifiers)
@@ -89,8 +101,29 @@ namespace DofusTabs.Core
 
         private void RegisterHotkeys()
         {
-            RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(_nextHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_nextHotkey.Key));
-            RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(_previousHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_previousHotkey.Key));
+            if (_windowHandle != IntPtr.Zero)
+            {
+                RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(_nextHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_nextHotkey.Key));
+                RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(_previousHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_previousHotkey.Key));
+            }
+        }
+
+        public void ReRegisterHotkeys()
+        {
+            // Re-registrar todos los atajos (útil después de cargar configuración)
+            if (_windowHandle != IntPtr.Zero)
+            {
+                UnregisterHotKey(_windowHandle, HOTKEY_ID_NEXT);
+                UnregisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS);
+                RegisterHotkeys();
+                
+                // Re-registrar atajos individuales
+                foreach (var hotkey in _individualHotkeys.Values.ToList())
+                {
+                    UnregisterHotKey(_windowHandle, hotkey.HotkeyId);
+                    RegisterHotKey(_windowHandle, hotkey.HotkeyId, GetModifiersValue(hotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(hotkey.Key));
+                }
+            }
         }
 
         private void UnregisterHotkeys()
@@ -169,6 +202,11 @@ namespace DofusTabs.Core
 
         public void RegisterIndividualHotkey(WindowInfo windowInfo, ModifierKeys modifiers, Key key)
         {
+            if (_windowHandle == IntPtr.Zero)
+            {
+                return; // No se puede registrar si el handle no está disponible
+            }
+
             // Desregistrar el atajo anterior si existe
             if (_individualHotkeys.ContainsKey(windowInfo.ProcessId))
             {
