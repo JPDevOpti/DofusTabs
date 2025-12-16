@@ -9,45 +9,115 @@
         Topmost="True"
         ShowInTaskbar="False"
         ResizeMode="NoResize"
-        WindowStartupLocation="Manual"
-        MouseLeftButtonDown="Window_MouseLeftButtonDown">
-    <Border Background="#F0F0F0" 
-            BorderBrush="#CCCCCC" 
+        WindowStartupLocation="Manual">
+    <Window.Resources>
+        <DataTemplate x:Key="FullItemTemplate">
+            <Border x:Name="CharacterBorder"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="4,3"
+                    Margin="0,1,0,1"
+                    Cursor="Hand"
+                    MouseLeftButtonDown="CharacterItem_Click"
+                    Tag="{Binding}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Image Grid.Column="0"
+                           Source="{Binding IconPath}"
+                           Width="24"
+                           Height="24"
+                           Margin="0,0,6,0"
+                           Stretch="Uniform"/>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding CharacterName}"
+                               FontSize="11"
+                               Foreground="{StaticResource RetroTextBrush}"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="CompactItemTemplate">
+            <Border x:Name="CharacterBorder"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="4"
+                    Margin="0,1,0,1"
+                    Cursor="Hand"
+                    MouseLeftButtonDown="CharacterItem_Click"
+                    Tag="{Binding}">
+                <Image Source="{Binding IconPath}"
+                       Width="28"
+                       Height="28"
+                       Stretch="Uniform"/>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Border x:Name="OverlayContainer"
+            Background="{StaticResource RetroBeigeBrush}" 
+            BorderBrush="{StaticResource RetroBorderBrush}" 
             BorderThickness="1"
             CornerRadius="4"
-            Padding="6"
-            Cursor="Hand">
-        <ItemsControl x:Name="CharactersList">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <Border x:Name="CharacterBorder"
+            Padding="4"
+            MouseLeftButtonDown="Border_MouseLeftButtonDown">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            DockPanel.Dock="Right"
+                            Margin="2,0,0,0">
+                    <Button x:Name="CompactToggleButton"
                             Background="Transparent"
                             BorderThickness="0"
-                            Padding="4,3"
-                            Margin="0,1,0,1">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            
-                            <Image Grid.Column="0"
-                                   Source="{Binding IconPath}"
-                                   Width="24"
-                                   Height="24"
-                                   Margin="0,0,6,0"
-                                   Stretch="Uniform"/>
-                            
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding CharacterName}"
-                                       FontSize="11"
-                                       Foreground="#333333"
-                                       VerticalAlignment="Center"/>
-                        </Grid>
-                    </Border>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
+                            Width="22"
+                            Height="20"
+                            Padding="0"
+                            Margin="0,0,4,0"
+                            ToolTip="Mostrar solo iconos"
+                            Click="CompactToggleButton_Click">
+                        <TextBlock x:Name="CompactToggleText"
+                                   Text="←"
+                                   FontSize="12"
+                                   Foreground="Black"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"/>
+                    </Button>
+                    <Button x:Name="CloseOverlayButton"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Width="22"
+                            Height="20"
+                            Padding="0"
+                            ToolTip="Cerrar overlay"
+                            Click="CloseOverlayButton_Click">
+                        <TextBlock Text="X"
+                                   FontSize="12"
+                                   Foreground="Black"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"/>
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+
+            <ItemsControl x:Name="CharactersList"
+                          Grid.Row="1"
+                          ItemTemplate="{StaticResource FullItemTemplate}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+        </Grid>
     </Border>
 </Window>
 

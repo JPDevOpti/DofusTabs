@@ -4,8 +4,10 @@
         Title="DofusTabs" Height="600" Width="800"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
-        MinHeight="500" MinWidth="700">
-    <Grid>
+        MinHeight="500" MinWidth="700"
+        Icon="/Resources/Icon.png"
+        Background="{StaticResource RetroBeigeBrush}">
+    <Grid Background="{StaticResource RetroBeigeBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -13,7 +15,7 @@
         </Grid.RowDefinitions>
 
         <!-- Barra de menú -->
-        <Menu Grid.Row="0">
+        <Menu Grid.Row="0" Background="{StaticResource RetroHeaderBrush}" Foreground="{StaticResource RetroTextBrush}">
             <MenuItem Header="Archivo">
                 <MenuItem Header="Salir" Click="ExitMenuItem_Click"/>
             </MenuItem>
@@ -133,6 +135,7 @@
                                     <Button Grid.Column="1"
                                             Content="Limpiar"
                                             Padding="8,3"
+                                            VerticalAlignment="Center"
                                             Click="ClearIndividualHotkeyButton_Click"
                                             Tag="{Binding}"/>
                                 </Grid>

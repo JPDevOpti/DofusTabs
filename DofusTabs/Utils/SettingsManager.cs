@@ -34,6 +34,8 @@ namespace DofusTabs.Utils
             public List<WindowSettings> Windows { get; set; } = new List<WindowSettings>();
             public double OverlayX { get; set; } = -1;
             public double OverlayY { get; set; } = -1;
+            public bool OverlayVisible { get; set; } = false;
+            public bool OverlayCompact { get; set; } = false;
         }
 
         public static void SaveSettings(List<WindowInfo> windows, HotkeyManager? hotkeyManager)
@@ -202,6 +204,30 @@ namespace DofusTabs.Utils
         {
             settings.OverlayX = x;
             settings.OverlayY = y;
+        }
+
+        public static void SaveOverlayState(bool isVisible, bool isCompact, double x, double y)
+        {
+            try
+            {
+                var settings = LoadSettings() ?? new AppSettings();
+                settings.OverlayVisible = isVisible;
+                settings.OverlayCompact = isCompact;
+                SaveOverlayPositionInSettings(settings, x, y);
+
+                var directory = Path.GetDirectoryName(SettingsPath);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(SettingsPath, json);
+            }
+            catch
+            {
+                // Ignorar errores al guardar
+            }
         }
     }
 }

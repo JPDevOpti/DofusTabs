@@ -23,7 +23,6 @@ namespace DofusTabs.Core
 
         private IntPtr _windowHandle;
         private HwndSource? _source;
-        private WindowManager _windowManager;
 
         private const int HOTKEY_ID_NEXT = 1;
         private const int HOTKEY_ID_PREVIOUS = 2;
@@ -33,14 +32,19 @@ namespace DofusTabs.Core
         private HotkeyConfig _previousHotkey;
         private Dictionary<uint, IndividualHotkeyInfo> _individualHotkeys = new Dictionary<uint, IndividualHotkeyInfo>();
         private int _nextIndividualHotkeyId = HOTKEY_ID_INDIVIDUAL_START;
+        private bool _suspendHotkeyActions = false;
 
         public event Action? OnNextWindow;
         public event Action? OnPreviousWindow;
         public event Action<WindowInfo>? OnIndividualHotkey;
 
-        public HotkeyManager(Window window, WindowManager windowManager)
+        public void SetHotkeyActionsSuspended(bool suspended)
         {
-            _windowManager = windowManager;
+            _suspendHotkeyActions = suspended;
+        }
+
+        public HotkeyManager(Window window)
+        {
             _nextHotkey = new HotkeyConfig { Modifiers = ModifierKeys.Alt, Key = Key.Tab };
             _previousHotkey = new HotkeyConfig { Modifiers = ModifierKeys.Alt | ModifierKeys.Shift, Key = Key.Tab };
             Initialize(window);
@@ -89,6 +93,7 @@ namespace DofusTabs.Core
                 RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
             }
         }
+
 
         private uint GetModifiersValue(ModifierKeys modifiers)
         {
@@ -168,10 +173,18 @@ namespace DofusTabs.Core
             public Key Key { get; set; }
         }
 
+
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg == WM_HOTKEY)
             {
+                // Durante la captura de atajos, evitar que se ejecute cualquier acción
+                if (_suspendHotkeyActions)
+                {
+                    handled = true;
+                    return IntPtr.Zero;
+                }
+
                 int id = wParam.ToInt32();
                 switch (id)
                 {
@@ -207,7 +220,17 @@ namespace DofusTabs.Core
                 return; // No se puede registrar si el handle no está disponible
             }
 
-            // Desregistrar el atajo anterior si existe
+            // Buscar y desregistrar cualquier otro atajo que use la misma combinación
+            var conflictHotkey = _individualHotkeys.Values.FirstOrDefault(h => 
+                h.Modifiers == modifiers && h.Key == key && h.WindowInfo.ProcessId != windowInfo.ProcessId);
+            
+            if (conflictHotkey != null)
+            {
+                UnregisterHotKey(_windowHandle, conflictHotkey.HotkeyId);
+                _individualHotkeys.Remove(conflictHotkey.WindowInfo.ProcessId);
+            }
+
+            // Desregistrar el atajo anterior de esta ventana si existe
             if (_individualHotkeys.ContainsKey(windowInfo.ProcessId))
             {
                 var oldHotkey = _individualHotkeys[windowInfo.ProcessId];
