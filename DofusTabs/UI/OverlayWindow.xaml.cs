@@ -19,20 +19,29 @@ namespace DofusTabs.UI
         private DispatcherTimer _checkTimer;
         private List<WindowInfo> _cachedWindows = new List<WindowInfo>();
         private List<WindowInfo> _providedWindows = new List<WindowInfo>();
-        private static readonly SolidColorBrush ActiveBrush = new SolidColorBrush(Color.FromArgb(200, 0, 120, 212));
-        private static readonly SolidColorBrush ActiveBorderBrush = new SolidColorBrush(Color.FromArgb(255, 0, 90, 158));
+        private static readonly SolidColorBrush ActiveBrush = new SolidColorBrush(Color.FromRgb(143, 122, 78));
+        private static readonly SolidColorBrush ActiveBorderBrush = new SolidColorBrush(Color.FromRgb(111, 90, 52));
+        private bool _isCompact = false;
+        private Dictionary<uint, Border> _borderCache = new Dictionary<uint, Border>();
+        private uint? _lastActiveProcessId = null;
+
+        public event Action? OnOverlayHidden;
+        public event Action<bool>? OnCompactChanged;
+
+        public bool IsCompact => _isCompact;
 
         public OverlayWindow()
         {
             InitializeComponent();
             _windowManager = new WindowManager();
             
-            // Timer solo para actualizar el resaltado
+            // Timer optimizado para actualizar el resaltado más rápido
             _checkTimer = new DispatcherTimer();
-            _checkTimer.Interval = TimeSpan.FromMilliseconds(200);
+            _checkTimer.Interval = TimeSpan.FromMilliseconds(50);
             _checkTimer.Tick += Timer_Tick;
             
             Loaded += OverlayWindow_Loaded;
+            ApplyLayoutMode();
         }
 
         private void OverlayWindow_Loaded(object sender, RoutedEventArgs e)
@@ -41,11 +50,44 @@ namespace DofusTabs.UI
             _checkTimer.Start();
         }
 
-        private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private void CompactToggleButton_Click(object sender, RoutedEventArgs e)
         {
-            if (e.ButtonState == MouseButtonState.Pressed)
+            _isCompact = !_isCompact;
+            ApplyLayoutMode();
+            HighlightCurrentCharacter();
+            OnCompactChanged?.Invoke(_isCompact);
+        }
+
+        private void CloseOverlayButton_Click(object sender, RoutedEventArgs e)
+        {
+            Hide();
+            OnOverlayHidden?.Invoke();
+        }
+
+        private void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Solo permitir drag si se hace clic en el contenedor (no en los items)
+            if (e.Source == sender && e.ButtonState == MouseButtonState.Pressed)
             {
                 this.DragMove();
+            }
+        }
+
+        private void CharacterItem_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Border border && border.Tag is WindowInfo windowInfo)
+            {
+                if (windowInfo.IsEnabled)
+                {
+                    // Cambiar a esta ventana
+                    var windows = _cachedWindows.OrderBy(w => w.DisplayOrder).ToList();
+                    int index = windows.IndexOf(windowInfo);
+                    if (index >= 0)
+                    {
+                        _windowManager.SwitchToWindow(windowInfo, index);
+                    }
+                }
+                e.Handled = true;
             }
         }
 
@@ -116,6 +158,10 @@ namespace DofusTabs.UI
             {
                 _cachedWindows = newWindows;
                 CharactersList.ItemsSource = _cachedWindows;
+                
+                // Limpiar caché de borders porque los contenedores cambiaron
+                _borderCache.Clear();
+                _lastActiveProcessId = null;
 
                 if (_currentActiveWindow != null)
                 {
@@ -145,30 +191,50 @@ namespace DofusTabs.UI
 
         private void HighlightCurrentCharacter()
         {
-            if (_currentActiveWindow == null) return;
+            uint? currentActiveId = _currentActiveWindow?.ProcessId;
+            
+            // Solo actualizar si realmente cambió
+            if (currentActiveId == _lastActiveProcessId)
+                return;
+            
+            uint? previousActiveId = _lastActiveProcessId;
+            _lastActiveProcessId = currentActiveId;
 
-            // Actualizar resaltado de forma optimizada
+            // Actualizar solo los elementos que cambiaron (anterior y nuevo)
             foreach (var item in CharactersList.Items)
             {
                 if (item is WindowInfo windowInfo)
                 {
-                    var container = CharactersList.ItemContainerGenerator.ContainerFromItem(item) as FrameworkElement;
-                    if (container != null)
+                    // Solo procesar si este item es el nuevo activo o era el anterior activo
+                    if (windowInfo.ProcessId != currentActiveId && windowInfo.ProcessId != previousActiveId)
+                        continue;
+
+                    // Buscar border en caché o en árbol visual
+                    if (!_borderCache.TryGetValue(windowInfo.ProcessId, out var border))
                     {
-                        var border = FindVisualChild<Border>(container);
-                        if (border != null)
+                        var container = CharactersList.ItemContainerGenerator.ContainerFromItem(item) as FrameworkElement;
+                        if (container != null)
                         {
-                            if (windowInfo.ProcessId == _currentActiveWindow.ProcessId)
+                            border = FindVisualChild<Border>(container);
+                            if (border != null)
                             {
-                                border.Background = ActiveBrush;
-                                border.BorderBrush = ActiveBorderBrush;
-                                border.BorderThickness = new Thickness(1);
+                                _borderCache[windowInfo.ProcessId] = border;
                             }
-                            else
-                            {
-                                border.Background = Brushes.Transparent;
-                                border.BorderThickness = new Thickness(0);
-                            }
+                        }
+                    }
+
+                    if (border != null)
+                    {
+                        if (windowInfo.ProcessId == currentActiveId)
+                        {
+                            border.Background = ActiveBrush;
+                            border.BorderBrush = ActiveBorderBrush;
+                            border.BorderThickness = new Thickness(1);
+                        }
+                        else
+                        {
+                            border.Background = Brushes.Transparent;
+                            border.BorderThickness = new Thickness(0);
                         }
                     }
                 }
@@ -230,6 +296,43 @@ namespace DofusTabs.UI
             SavePosition();
             _checkTimer?.Stop();
             base.OnClosed(e);
+        }
+
+        private void ApplyLayoutMode()
+        {
+            // Ajustar plantilla y paddings según modo compacto
+            var templateKey = _isCompact ? "CompactItemTemplate" : "FullItemTemplate";
+            CharactersList.ItemTemplate = (DataTemplate)FindResource(templateKey);
+
+            if (OverlayContainer != null)
+            {
+                OverlayContainer.Padding = _isCompact ? new Thickness(3) : new Thickness(4);
+            }
+
+            // Limpiar caché porque cambiaron los contenedores
+            _borderCache.Clear();
+            _lastActiveProcessId = null;
+
+            UpdateCompactToggleVisuals();
+        }
+
+        public void SetCompactMode(bool compact)
+        {
+            if (_isCompact == compact) return;
+
+            _isCompact = compact;
+            ApplyLayoutMode();
+            HighlightCurrentCharacter();
+            OnCompactChanged?.Invoke(_isCompact);
+        }
+
+        private void UpdateCompactToggleVisuals()
+        {
+            if (CompactToggleText == null || CompactToggleButton == null) return;
+
+            // Flecha indica la acción disponible
+            CompactToggleText.Text = _isCompact ? "→" : "←";
+            CompactToggleButton.ToolTip = _isCompact ? "Mostrar nombres" : "Mostrar solo iconos";
         }
     }
 }

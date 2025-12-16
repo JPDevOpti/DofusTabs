@@ -6,6 +6,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using DofusTabs.Core;
 using DofusTabs.Utils;
+using System.ComponentModel;
+using System.Threading.Tasks;
+using Forms = System.Windows.Forms;
+using Drawing = System.Drawing;
 
 namespace DofusTabs.UI
 {
@@ -20,6 +24,8 @@ namespace DofusTabs.UI
         private WindowInfo? _draggedWindow = null;
         private System.Windows.Point _dragStartPoint;
         private OverlayWindow? _overlayWindow;
+        private Forms.NotifyIcon? _notifyIcon;
+        private bool _isExiting = false;
 
         public MainWindow()
         {
@@ -27,15 +33,21 @@ namespace DofusTabs.UI
             _windowManager = new WindowManager();
             InitializeHotkeys();
             InitializeOverlay();
+            SetupTrayIcon();
             
             // Cargar configuración después de que la ventana esté cargada
             Loaded += MainWindow_Loaded;
+            StateChanged += MainWindow_StateChanged;
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
             LoadSettings();
             RefreshWindowsList();
+            if (_overlayWindow != null && _overlayWindow.IsVisible)
+            {
+                RefreshOverlayListFromGrid();
+            }
             UpdateHotkeyDisplay();
             
             // Re-registrar todos los atajos después de cargar la configuración
@@ -43,13 +55,86 @@ namespace DofusTabs.UI
             {
                 _hotkeyManager.ReRegisterHotkeys();
             }
+
+            // Asegurar que el icono de bandeja quede visible
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Visible = true;
+            }
         }
 
         private void InitializeOverlay()
         {
             _overlayWindow = new OverlayWindow();
+            _overlayWindow.OnOverlayHidden += OverlayWindow_OnOverlayHidden;
+            _overlayWindow.OnCompactChanged += OverlayWindow_OnCompactChanged;
             _overlayWindow.LoadPosition();
             _overlayWindow.Hide();
+        }
+
+        private void SetupTrayIcon()
+        {
+            _notifyIcon = new Forms.NotifyIcon();
+            try
+            {
+                // Usar el icono del ejecutable
+                _notifyIcon.Icon = Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            }
+            catch
+            {
+                // Si falla, no asignar icono
+            }
+
+            _notifyIcon.Text = "DofusTabs (en ejecución)";
+            _notifyIcon.Visible = true;
+            _notifyIcon.DoubleClick += (s, e) => RestoreFromTray();
+
+            var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add("Mostrar", null, (s, e) => RestoreFromTray());
+            menu.Items.Add("Salir", null, (s, e) => ExitFromTray());
+            _notifyIcon.ContextMenuStrip = menu;
+        }
+
+        private void RestoreFromTray()
+        {
+            Show();
+            ShowInTaskbar = true;
+            WindowState = WindowState.Normal;
+            Activate();
+        }
+
+        private void ExitFromTray()
+        {
+            _isExiting = true;
+            Close();
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            SaveOverlayState();
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+            }
+            base.OnClosing(e);
+        }
+
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            if (WindowState == WindowState.Minimized && !_isExiting)
+            {
+                Hide();
+                ShowInTaskbar = false;
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.Visible = true;
+                }
+            }
+            else if (WindowState == WindowState.Normal)
+            {
+                ShowInTaskbar = true;
+            }
         }
 
         private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e)
@@ -63,27 +148,24 @@ namespace DofusTabs.UI
             {
                 if (_overlayWindow.IsVisible)
                 {
-                    _overlayWindow.Hide();
-                    ToggleOverlayButton.Content = "Mostrar Overlay";
+                    HideOverlay();
                 }
                 else
                 {
-                    _overlayWindow.Show();
-                    _overlayWindow.Topmost = true;
-                    // Pasar la lista actual de la tabla para garantizar el mismo orden
-                    var currentWindows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
-                    if (currentWindows != null)
-                    {
-                        var windowsList = currentWindows.Cast<WindowInfo>().ToList();
-                        _overlayWindow.RefreshWindowsList(windowsList);
-                    }
-                    else
-                    {
-                        _overlayWindow.RefreshWindowsList();
-                    }
-                    ToggleOverlayButton.Content = "Ocultar Overlay";
+                    ShowOverlay();
                 }
             }
+        }
+
+        private void OverlayWindow_OnOverlayHidden()
+        {
+            ToggleOverlayButton.Content = "Mostrar Overlay";
+            SaveOverlayState();
+        }
+
+        private void OverlayWindow_OnCompactChanged(bool isCompact)
+        {
+            SaveOverlayState();
         }
 
         private void LoadSettings()
@@ -109,12 +191,94 @@ namespace DofusTabs.UI
                         _hotkeyManager.UpdatePreviousHotkey(modifiers, key);
                     }
                 }
+
+                ApplyOverlaySettings(settings);
             }
         }
 
+        private void ApplyOverlaySettings(SettingsManager.AppSettings settings)
+        {
+            if (_overlayWindow == null)
+            {
+                InitializeOverlay();
+            }
+
+            if (_overlayWindow == null)
+            {
+                return;
+            }
+
+            _overlayWindow.SetCompactMode(settings.OverlayCompact);
+
+            if (settings.OverlayVisible)
+            {
+                ShowOverlay();
+            }
+            else
+            {
+                ToggleOverlayButton.Content = "Mostrar Overlay";
+            }
+        }
+
+        private void ShowOverlay()
+        {
+            if (_overlayWindow == null)
+            {
+                InitializeOverlay();
+            }
+
+            if (_overlayWindow == null)
+            {
+                return;
+            }
+
+            _overlayWindow.Show();
+            _overlayWindow.Topmost = true;
+            RefreshOverlayListFromGrid();
+            ToggleOverlayButton.Content = "Ocultar Overlay";
+            SaveOverlayState();
+        }
+
+        private void HideOverlay()
+        {
+            if (_overlayWindow == null) return;
+
+            _overlayWindow.Hide();
+            ToggleOverlayButton.Content = "Mostrar Overlay";
+            SaveOverlayState();
+        }
+
+        private void RefreshOverlayListFromGrid()
+        {
+            if (_overlayWindow == null) return;
+
+            var currentWindows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
+            if (currentWindows != null)
+            {
+                var windowsList = currentWindows.Cast<WindowInfo>().ToList();
+                _overlayWindow.RefreshWindowsList(windowsList);
+            }
+            else
+            {
+                _overlayWindow.RefreshWindowsList();
+            }
+        }
+
+        private void SaveOverlayState()
+        {
+            if (_overlayWindow == null) return;
+
+            SettingsManager.SaveOverlayState(
+                _overlayWindow.IsVisible,
+                _overlayWindow.IsCompact,
+                _overlayWindow.Left,
+                _overlayWindow.Top);
+        }
+
+
         private void InitializeHotkeys()
         {
-            _hotkeyManager = new HotkeyManager(this, _windowManager);
+            _hotkeyManager = new HotkeyManager(this);
             _hotkeyManager.OnNextWindow += () => Dispatcher.Invoke(() => SwitchToNextWindow());
             _hotkeyManager.OnPreviousWindow += () => Dispatcher.Invoke(() => SwitchToPreviousWindow());
             _hotkeyManager.OnIndividualHotkey += (windowInfo) => Dispatcher.Invoke(() => SwitchToIndividualWindow(windowInfo));
@@ -283,6 +447,14 @@ namespace DofusTabs.UI
 
         private void SwitchToNextWindow()
         {
+            // Solo permitir si hay una ventana de Dofus activa
+            var currentActive = _windowManager.GetCurrentActiveWindow();
+            if (currentActive == null)
+            {
+                StatusTextBlock.Text = "Enfoca una ventana de Dofus primero";
+                return;
+            }
+
             if (_windowManager.SwitchToNextWindow())
             {
                 StatusTextBlock.Text = "Cambiado a siguiente ventana";
@@ -296,6 +468,14 @@ namespace DofusTabs.UI
 
         private void SwitchToPreviousWindow()
         {
+            // Solo permitir si hay una ventana de Dofus activa
+            var currentActive = _windowManager.GetCurrentActiveWindow();
+            if (currentActive == null)
+            {
+                StatusTextBlock.Text = "Enfoca una ventana de Dofus primero";
+                return;
+            }
+
             if (_windowManager.SwitchToPreviousWindow())
             {
                 StatusTextBlock.Text = "Cambiado a ventana anterior";
@@ -350,6 +530,7 @@ namespace DofusTabs.UI
                     _currentCapturingWindow = windowInfo;
                     textBox.Text = "Presiona la combinación de teclas...";
                     _isCapturingHotkey = true;
+                    _hotkeyManager?.SetHotkeyActionsSuspended(true);
                 }
             }
         }
@@ -366,6 +547,7 @@ namespace DofusTabs.UI
         {
             _isCapturingHotkey = false;
             _currentCapturingWindow = null;
+            _hotkeyManager?.SetHotkeyActionsSuspended(false);
         }
 
         private void IndividualHotkeyTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -388,6 +570,7 @@ namespace DofusTabs.UI
                     }
                     _isCapturingHotkey = false;
                     _currentCapturingWindow = null;
+                    _hotkeyManager?.SetHotkeyActionsSuspended(false);
                     textBox.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next));
                     return;
                 }
@@ -403,16 +586,41 @@ namespace DofusTabs.UI
                 }
 
                 string display = FormatHotkey(modifiers, key);
+                
+                // Verificar si el atajo ya está en uso por otra ventana
+                var windows = WindowsDataGrid.ItemsSource as System.Collections.IEnumerable;
+                if (windows != null)
+                {
+                    var windowsList = windows.Cast<WindowInfo>().ToList();
+                    var conflictWindow = windowsList.FirstOrDefault(w => 
+                        w.ProcessId != _currentCapturingWindow.ProcessId && 
+                        w.IndividualHotkey == display);
+                    
+                    if (conflictWindow != null)
+                    {
+                        // Liberar el atajo de la ventana anterior
+                        if (_hotkeyManager != null)
+                        {
+                            _hotkeyManager.UnregisterIndividualHotkey(conflictWindow.ProcessId);
+                        }
+                        conflictWindow.IndividualHotkey = string.Empty;
+                        StatusTextBlock.Text = $"Atajo removido de {conflictWindow.CharacterName} y asignado a {_currentCapturingWindow.CharacterName}";
+                    }
+                    else
+                    {
+                        StatusTextBlock.Text = $"Atajo asignado a {_currentCapturingWindow.CharacterName}: {display}";
+                    }
+                }
+                
                 _currentCapturingWindow.IndividualHotkey = display;
                 textBox.Text = display;
 
                 // Registrar el atajo individual para esta ventana
                 RegisterIndividualHotkey(_currentCapturingWindow, modifiers, key);
                 
-                StatusTextBlock.Text = $"Atajo asignado a {_currentCapturingWindow.CharacterName}: {display}";
-                
                 _isCapturingHotkey = false;
                 _currentCapturingWindow = null;
+                _hotkeyManager?.SetHotkeyActionsSuspended(false);
             }
         }
 
@@ -515,12 +723,14 @@ namespace DofusTabs.UI
             {
                 textBox.Text = "Presiona la combinación de teclas...";
                 _isCapturingHotkey = true;
+                _hotkeyManager?.SetHotkeyActionsSuspended(true);
             }
         }
 
         private void HotkeyTextBox_LostFocus(object sender, RoutedEventArgs e)
         {
             _isCapturingHotkey = false;
+            _hotkeyManager?.SetHotkeyActionsSuspended(false);
         }
 
         private void NextHotkeyTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -532,6 +742,7 @@ namespace DofusTabs.UI
             if (e.Key == Key.Tab || e.Key == Key.Enter || e.Key == Key.Escape)
             {
                 UpdateHotkeyDisplay();
+                _hotkeyManager?.SetHotkeyActionsSuspended(false);
                 NextHotkeyTextBox.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next));
                 return;
             }
@@ -558,10 +769,13 @@ namespace DofusTabs.UI
                 {
                     _hotkeyManager.UpdateNextHotkey(modifiers, key);
                     StatusTextBlock.Text = "Atajo actualizado: " + display;
+                    SaveSettings();
+                    _hotkeyManager.SetHotkeyActionsSuspended(false);
                 }
                 catch
                 {
                     StatusTextBlock.Text = "Error al registrar el atajo";
+                    _hotkeyManager.SetHotkeyActionsSuspended(false);
                 }
             }
         }
@@ -575,6 +789,7 @@ namespace DofusTabs.UI
             if (e.Key == Key.Tab || e.Key == Key.Enter || e.Key == Key.Escape)
             {
                 UpdateHotkeyDisplay();
+                _hotkeyManager?.SetHotkeyActionsSuspended(false);
                 PreviousHotkeyTextBox.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next));
                 return;
             }
@@ -601,13 +816,17 @@ namespace DofusTabs.UI
                 {
                     _hotkeyManager.UpdatePreviousHotkey(modifiers, key);
                     StatusTextBlock.Text = "Atajo actualizado: " + display;
+                    SaveSettings();
+                    _hotkeyManager.SetHotkeyActionsSuspended(false);
                 }
                 catch
                 {
                     StatusTextBlock.Text = "Error al registrar el atajo";
+                    _hotkeyManager.SetHotkeyActionsSuspended(false);
                 }
             }
         }
+
 
         private string FormatHotkey(ModifierKeys modifiers, Key key)
         {
@@ -623,13 +842,16 @@ namespace DofusTabs.UI
         {
             NextHotkeyTextBox.Text = "Ninguno";
             StatusTextBlock.Text = "Atajo eliminado. Configura uno nuevo haciendo clic en el campo.";
+            SaveSettings();
         }
 
         private void ClearPreviousHotkeyButton_Click(object sender, RoutedEventArgs e)
         {
             PreviousHotkeyTextBox.Text = "Ninguno";
             StatusTextBlock.Text = "Atajo eliminado. Configura uno nuevo haciendo clic en el campo.";
+            SaveSettings();
         }
+
 
         private void ClearIndividualHotkeyButton_Click(object sender, RoutedEventArgs e)
         {

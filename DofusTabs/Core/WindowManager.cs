@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows;
 
 namespace DofusTabs.Core
 {
@@ -38,13 +36,13 @@ namespace DofusTabs.Core
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
+
         private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
         private const int SW_RESTORE = 9;
         private const string DOFUS_PROCESS_NAME = "Dofus";
 
         private List<WindowInfo> _dofusWindows;
-        private int _currentWindowIndex = -1;
 
         public WindowManager()
         {
@@ -183,7 +181,6 @@ namespace DofusTabs.Core
                 }
 
                 SetForegroundWindow(windowInfo.Handle);
-                _currentWindowIndex = index;
                 return true;
             }
             catch

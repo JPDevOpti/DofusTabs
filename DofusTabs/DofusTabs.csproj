@@ -5,8 +5,10 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>DofusTabs</AssemblyName>
     <RootNamespace>DofusTabs</RootNamespace>
+    <ApplicationIcon>Resources\Icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="Resources\Icon.png" />
     <Resource Include="Resources\Icons\*.jpg" />
     <Resource Include="Resources\Icons\*.png" />
   </ItemGroup>
