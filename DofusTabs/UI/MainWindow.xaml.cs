@@ -77,8 +77,12 @@ namespace DofusTabs.UI
             _notifyIcon = new Forms.NotifyIcon();
             try
             {
-                // Usar el icono del ejecutable
-                _notifyIcon.Icon = Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                // En publish single-file, Assembly.Location puede venir vacío.
+                var exePath = Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(exePath))
+                {
+                    _notifyIcon.Icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
+                }
             }
             catch
             {
