@@ -56,6 +56,11 @@ namespace DofusTabs.Core
             EnumWindows(EnumWindowCallback, IntPtr.Zero);
             
             // Restaurar orden, estado y atajos
+            // Nota: para ventanas nuevas, asignar un DisplayOrder secuencial sin duplicados.
+            var nextDisplayOrder = existingWindows.Any()
+                ? existingWindows.Values.Max(w => w.DisplayOrder) + 1
+                : 0;
+
             foreach (var window in _dofusWindows)
             {
                 if (existingWindows.ContainsKey(window.ProcessId))
@@ -67,7 +72,7 @@ namespace DofusTabs.Core
                 }
                 else
                 {
-                    window.DisplayOrder = _dofusWindows.Count;
+                    window.DisplayOrder = nextDisplayOrder++;
                 }
             }
             
@@ -280,8 +285,8 @@ namespace DofusTabs.Core
                     { "Ocra", "Ocra.jpg" },
                     { "Osamodas", "Osamodas.jpg" },
                     { "Pandawa", "Pandawa.jpg" },
-                    { "Sacrígido", "Sacrgrito.jpg" },
-                    { "Sacrigido", "Sacrgrito.jpg" },
+                    { "Sacrógrito", "Sacrgrito.jpg" },
+                    { "Sacrogrito", "Sacrgrito.jpg" },
                     { "Sadida", "Sadida.jpg" },
                     { "Selotrop", "Selotrop.jpg" },
                     { "Sram", "Sram.jpg" },
@@ -302,12 +307,9 @@ namespace DofusTabs.Core
                     // Ruta relativa desde el directorio de trabajo
                     possiblePaths.Add(System.IO.Path.Combine("Resources", "Icons", iconFile));
                     
-                    // Ruta desde el directorio de la aplicación
-                    var appDirectory = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                    if (appDirectory != null)
-                    {
-                        possiblePaths.Add(System.IO.Path.Combine(appDirectory, "Resources", "Icons", iconFile));
-                    }
+                    // Ruta desde el directorio de la aplicación (compatible con publish single-file)
+                    var appDirectory = AppContext.BaseDirectory;
+                    possiblePaths.Add(System.IO.Path.Combine(appDirectory, "Resources", "Icons", iconFile));
                     
                     // Ruta desde el directorio base del proyecto (para desarrollo)
                     var baseDirectory = System.IO.Directory.GetCurrentDirectory();

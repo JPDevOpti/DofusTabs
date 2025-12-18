@@ -24,8 +24,6 @@
 
   <ItemGroup>
     <Resource Include="Resources\Icon.png" />
-    <Resource Include="Resources\Icons\*.jpg" />
-    <Resource Include="Resources\Icons\*.png" />
   </ItemGroup>
 
   <ItemGroup>
