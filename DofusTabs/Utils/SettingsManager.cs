@@ -76,14 +76,7 @@ namespace DofusTabs.Utils
                     settings.Windows.Add(windowSettings);
                 }
 
-                var directory = Path.GetDirectoryName(SettingsPath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(SettingsPath, json);
+                SaveSettingsFile(settings);
             }
             catch
             {
@@ -167,15 +160,8 @@ namespace DofusTabs.Utils
             {
                 var settings = LoadSettings() ?? new AppSettings();
                 SaveOverlayPositionInSettings(settings, x, y);
-                
-                var directory = Path.GetDirectoryName(SettingsPath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
 
-                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(SettingsPath, json);
+                SaveSettingsFile(settings);
             }
             catch
             {
@@ -215,18 +201,35 @@ namespace DofusTabs.Utils
                 settings.OverlayCompact = isCompact;
                 SaveOverlayPositionInSettings(settings, x, y);
 
-                var directory = Path.GetDirectoryName(SettingsPath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(SettingsPath, json);
+                SaveSettingsFile(settings);
             }
             catch
             {
                 // Ignorar errores al guardar
+            }
+        }
+
+        private static void SaveSettingsFile(AppSettings settings)
+        {
+            var directory = Path.GetDirectoryName(SettingsPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            var tempPath = SettingsPath + ".tmp";
+            var backupPath = SettingsPath + ".bak";
+
+            File.WriteAllText(tempPath, json);
+
+            if (File.Exists(SettingsPath))
+            {
+                File.Replace(tempPath, SettingsPath, backupPath, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(tempPath, SettingsPath);
             }
         }
     }

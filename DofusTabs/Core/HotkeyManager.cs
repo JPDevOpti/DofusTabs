@@ -30,6 +30,8 @@ namespace DofusTabs.Core
 
         private HotkeyConfig _nextHotkey;
         private HotkeyConfig _previousHotkey;
+        private bool _nextHotkeyEnabled;
+        private bool _previousHotkeyEnabled;
         private Dictionary<uint, IndividualHotkeyInfo> _individualHotkeys = new Dictionary<uint, IndividualHotkeyInfo>();
         private int _nextIndividualHotkeyId = HOTKEY_ID_INDIVIDUAL_START;
         private bool _suspendHotkeyActions = false;
@@ -47,6 +49,8 @@ namespace DofusTabs.Core
         {
             _nextHotkey = new HotkeyConfig { Modifiers = ModifierKeys.Alt, Key = Key.Tab };
             _previousHotkey = new HotkeyConfig { Modifiers = ModifierKeys.Alt | ModifierKeys.Shift, Key = Key.Tab };
+            _nextHotkeyEnabled = true;
+            _previousHotkeyEnabled = true;
             Initialize(window);
         }
 
@@ -68,30 +72,85 @@ namespace DofusTabs.Core
             };
         }
 
-        public void UpdateNextHotkey(ModifierKeys modifiers, Key key)
+        public bool UpdateNextHotkey(ModifierKeys modifiers, Key key)
         {
-            if (_windowHandle != IntPtr.Zero)
-            {
-                UnregisterHotKey(_windowHandle, HOTKEY_ID_NEXT);
-            }
-            _nextHotkey = new HotkeyConfig { Modifiers = modifiers, Key = key };
-            if (_windowHandle != IntPtr.Zero)
-            {
-                RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
-            }
+            return UpdateHotkeyCore(HOTKEY_ID_NEXT, modifiers, key, isNext: true);
         }
 
-        public void UpdatePreviousHotkey(ModifierKeys modifiers, Key key)
+        public bool UpdatePreviousHotkey(ModifierKeys modifiers, Key key)
         {
-            if (_windowHandle != IntPtr.Zero)
+            return UpdateHotkeyCore(HOTKEY_ID_PREVIOUS, modifiers, key, isNext: false);
+        }
+
+        public void ClearNextHotkey()
+        {
+            _ = UpdateNextHotkey(ModifierKeys.None, Key.None);
+        }
+
+        public void ClearPreviousHotkey()
+        {
+            _ = UpdatePreviousHotkey(ModifierKeys.None, Key.None);
+        }
+
+        private bool UpdateHotkeyCore(int hotkeyId, ModifierKeys modifiers, Key key, bool isNext)
+        {
+            var oldConfig = isNext ? _nextHotkey : _previousHotkey;
+            bool oldEnabled = isNext ? _nextHotkeyEnabled : _previousHotkeyEnabled;
+
+            var newConfig = new HotkeyConfig { Modifiers = modifiers, Key = key };
+            bool newEnabled = key != Key.None;
+
+            if (isNext)
             {
-                UnregisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS);
+                _nextHotkey = newConfig;
+                _nextHotkeyEnabled = newEnabled;
             }
-            _previousHotkey = new HotkeyConfig { Modifiers = modifiers, Key = key };
-            if (_windowHandle != IntPtr.Zero)
+            else
             {
-                RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+                _previousHotkey = newConfig;
+                _previousHotkeyEnabled = newEnabled;
             }
+
+            if (_windowHandle == IntPtr.Zero)
+            {
+                return true;
+            }
+
+            UnregisterHotKey(_windowHandle, hotkeyId);
+
+            if (!newEnabled)
+            {
+                return true;
+            }
+
+            uint modifiersValue = GetModifiersValue(modifiers);
+            uint virtualKey = (uint)KeyInterop.VirtualKeyFromKey(key);
+            if (RegisterHotKey(_windowHandle, hotkeyId, modifiersValue, virtualKey))
+            {
+                return true;
+            }
+
+            if (isNext)
+            {
+                _nextHotkey = oldConfig;
+                _nextHotkeyEnabled = oldEnabled;
+            }
+            else
+            {
+                _previousHotkey = oldConfig;
+                _previousHotkeyEnabled = oldEnabled;
+            }
+
+            if (oldEnabled)
+            {
+                RegisterHotKey(
+                    _windowHandle,
+                    hotkeyId,
+                    GetModifiersValue(oldConfig.Modifiers),
+                    (uint)KeyInterop.VirtualKeyFromKey(oldConfig.Key));
+            }
+
+            return false;
         }
 
 
@@ -108,8 +167,15 @@ namespace DofusTabs.Core
         {
             if (_windowHandle != IntPtr.Zero)
             {
-                RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(_nextHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_nextHotkey.Key));
-                RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(_previousHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_previousHotkey.Key));
+                if (_nextHotkeyEnabled)
+                {
+                    RegisterHotKey(_windowHandle, HOTKEY_ID_NEXT, GetModifiersValue(_nextHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_nextHotkey.Key));
+                }
+
+                if (_previousHotkeyEnabled)
+                {
+                    RegisterHotKey(_windowHandle, HOTKEY_ID_PREVIOUS, GetModifiersValue(_previousHotkey.Modifiers), (uint)KeyInterop.VirtualKeyFromKey(_previousHotkey.Key));
+                }
             }
         }
 
@@ -139,12 +205,12 @@ namespace DofusTabs.Core
 
         public string GetNextHotkeyDisplay()
         {
-            return FormatHotkey(_nextHotkey);
+            return _nextHotkeyEnabled ? FormatHotkey(_nextHotkey) : "Ninguno";
         }
 
         public string GetPreviousHotkeyDisplay()
         {
-            return FormatHotkey(_previousHotkey);
+            return _previousHotkeyEnabled ? FormatHotkey(_previousHotkey) : "Ninguno";
         }
 
         public HotkeyConfig GetNextHotkeyConfig()
@@ -213,11 +279,11 @@ namespace DofusTabs.Core
             return IntPtr.Zero;
         }
 
-        public void RegisterIndividualHotkey(WindowInfo windowInfo, ModifierKeys modifiers, Key key)
+        public bool RegisterIndividualHotkey(WindowInfo windowInfo, ModifierKeys modifiers, Key key)
         {
             if (_windowHandle == IntPtr.Zero)
             {
-                return; // No se puede registrar si el handle no está disponible
+                return false; // No se puede registrar si el handle no está disponible
             }
 
             // Buscar y desregistrar cualquier otro atajo que use la misma combinación
@@ -249,7 +315,11 @@ namespace DofusTabs.Core
                     Modifiers = modifiers,
                     Key = key
                 };
+
+                return true;
             }
+
+            return false;
         }
 
         public void UnregisterIndividualHotkey(uint processId)

@@ -1,14 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DofusTabs.Core
 {
     public class WindowManager
     {
+        private sealed class PreviousWindowState
+        {
+            public int DisplayOrder { get; init; }
+            public bool IsEnabled { get; init; }
+            public string IndividualHotkey { get; init; } = string.Empty;
+        }
+
         [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
 
@@ -40,7 +49,13 @@ namespace DofusTabs.Core
         private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
         private const int SW_RESTORE = 9;
-        private const string DOFUS_PROCESS_NAME = "Dofus";
+        private static readonly string[] DofusProcessNames = { "dofus", "dofustouch" };
+        private static readonly string[] IgnoredWindowTitleTokens =
+        {
+            "ankama launcher",
+            "updater",
+            "launcher"
+        };
 
         private List<WindowInfo> _dofusWindows;
 
@@ -49,9 +64,25 @@ namespace DofusTabs.Core
             _dofusWindows = new List<WindowInfo>();
         }
 
-        public List<WindowInfo> GetDofusWindows()
+        public List<WindowInfo> GetDofusWindows(bool preservePreviousState = true)
         {
-            var existingWindows = _dofusWindows.ToDictionary(w => w.ProcessId, w => new { w.DisplayOrder, w.IsEnabled, w.IndividualHotkey });
+            Dictionary<uint, PreviousWindowState> existingWindows = preservePreviousState
+                ? _dofusWindows
+                    .GroupBy(w => w.ProcessId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g =>
+                        {
+                            var previous = g.OrderBy(w => w.DisplayOrder).First();
+                            return new PreviousWindowState
+                            {
+                                DisplayOrder = previous.DisplayOrder,
+                                IsEnabled = previous.IsEnabled,
+                                IndividualHotkey = previous.IndividualHotkey
+                            };
+                        })
+                : new Dictionary<uint, PreviousWindowState>();
+
             _dofusWindows.Clear();
             EnumWindows(EnumWindowCallback, IntPtr.Zero);
             
@@ -63,7 +94,7 @@ namespace DofusTabs.Core
 
             foreach (var window in _dofusWindows)
             {
-                if (existingWindows.ContainsKey(window.ProcessId))
+                if (preservePreviousState && existingWindows.ContainsKey(window.ProcessId))
                 {
                     var existing = existingWindows[window.ProcessId];
                     window.DisplayOrder = existing.DisplayOrder;
@@ -91,22 +122,33 @@ namespace DofusTabs.Core
                 Process process = Process.GetProcessById((int)processId);
                 string processName = process.ProcessName;
 
-                // Verificar si el proceso es Dofus (comparar sin extensión)
                 string processNameWithoutExt = processName.Replace(".exe", "");
-                if (processNameWithoutExt.Equals(DOFUS_PROCESS_NAME, StringComparison.OrdinalIgnoreCase))
+                if (IsDofusProcessName(processNameWithoutExt))
                 {
-                    int length = GetWindowTextLength(hWnd);
-                    StringBuilder windowTitle = new StringBuilder(length + 1);
-                    
-                    if (length > 0)
+                    string title = GetWindowTitle(hWnd);
+                    if (!IsRelevantDofusTitle(title))
                     {
-                        GetWindowText(hWnd, windowTitle, windowTitle.Capacity);
+                        return true;
+                    }
+
+                    var existingWindow = _dofusWindows.FirstOrDefault(w => w.ProcessId == processId);
+                    if (existingWindow != null)
+                    {
+                        // Quedarse con la ventana más descriptiva por proceso evita duplicados y mejora el nombre detectado.
+                        if (title.Length > existingWindow.Title.Length)
+                        {
+                            existingWindow.Handle = hWnd;
+                            existingWindow.Title = title;
+                            existingWindow.ProcessName = processName;
+                        }
+
+                        return true;
                     }
 
                     _dofusWindows.Add(new WindowInfo
                     {
                         Handle = hWnd,
-                        Title = windowTitle.ToString(),
+                        Title = title,
                         ProcessId = processId,
                         ProcessName = processName
                     });
@@ -118,6 +160,65 @@ namespace DofusTabs.Core
             }
 
             return true;
+        }
+
+        private static bool IsDofusProcessName(string processName)
+        {
+            return DofusProcessNames.Any(n => processName.Equals(n, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string GetWindowTitle(IntPtr hWnd)
+        {
+            int length = GetWindowTextLength(hWnd);
+            if (length <= 0)
+            {
+                return string.Empty;
+            }
+
+            StringBuilder windowTitle = new StringBuilder(length + 1);
+            GetWindowText(hWnd, windowTitle, windowTitle.Capacity);
+            return windowTitle.ToString().Trim();
+        }
+
+        private static bool IsRelevantDofusTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return false;
+            }
+
+            string normalized = NormalizeForMatch(title);
+            if (IgnoredWindowTitleTokens.Any(t => normalized.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string NormalizeForMatch(string value)
+        {
+            string normalized = value.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder(normalized.Length);
+
+            foreach (char c in normalized)
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
+                {
+                    continue;
+                }
+
+                if (char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))
+                {
+                    sb.Append(char.ToLowerInvariant(c));
+                }
+                else
+                {
+                    sb.Append(' ');
+                }
+            }
+
+            return Regex.Replace(sb.ToString(), "\\s+", " ").Trim();
         }
 
         public bool SwitchToNextWindow()
@@ -135,10 +236,10 @@ namespace DofusTabs.Core
             IntPtr activeHandle = GetForegroundWindow();
             var currentWindow = enabledWindows.FirstOrDefault(w => w.Handle == activeHandle);
             
-            // Si no encontramos la ventana actual, usar la primera
+            // Si no encontramos la ventana actual, empezar por la primera
             int currentIndex = currentWindow != null 
                 ? enabledWindows.IndexOf(currentWindow) 
-                : 0;
+                : -1;
 
             int nextIndex = (currentIndex + 1) % enabledWindows.Count;
             var nextWindow = enabledWindows[nextIndex];
@@ -163,10 +264,10 @@ namespace DofusTabs.Core
             IntPtr activeHandle = GetForegroundWindow();
             var currentWindow = enabledWindows.FirstOrDefault(w => w.Handle == activeHandle);
             
-            // Si no encontramos la ventana actual, usar la última
+            // Si no encontramos la ventana actual, empezar por la última
             int currentIndex = currentWindow != null 
                 ? enabledWindows.IndexOf(currentWindow) 
-                : enabledWindows.Count - 1;
+                : 0;
 
             int nextIndex = (currentIndex - 1 + enabledWindows.Count) % enabledWindows.Count;
             var nextWindow = enabledWindows[nextIndex];
@@ -205,8 +306,40 @@ namespace DofusTabs.Core
     public class WindowInfo : System.ComponentModel.INotifyPropertyChanged
     {
         private bool _isEnabled = true;
+        private bool _isActive = false;
         private string _individualHotkey = string.Empty;
         private int _displayOrder = 0;
+
+        private static readonly Dictionary<string, string> CharacterClassAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "aniripsa", "Aniripsa" },
+            { "anutrof", "Anutrof" },
+            { "feca", "Feca" },
+            { "forjalanza", "Forjalanza" },
+            { "hipermago", "Hipermago" },
+            { "ocra", "Ocra" },
+            { "osamodas", "Osamodas" },
+            { "pandawa", "Pandawa" },
+            { "sacrogrito", "Sacrógrito" },
+            { "sadida", "Sadida" },
+            { "selotrop", "Selotrop" },
+            { "sram", "Sram" },
+            { "steamer", "Steamer" },
+            { "tymador", "Tymador" },
+            { "uginak", "Uginak" },
+            { "xelor", "Xelor" },
+            { "yopuka", "Yopuka" },
+            { "zobal", "Zobal" },
+            { "zurcar", "Zurcar" }
+        };
+
+        private static readonly string[] IgnoredNameTokens =
+        {
+            "dofus",
+            "touch",
+            "ankama",
+            "launcher"
+        };
 
         public IntPtr Handle { get; set; }
         public string Title { get; set; } = string.Empty;
@@ -239,15 +372,36 @@ namespace DofusTabs.Core
             }
         }
 
+        public bool IsActive
+        {
+            get => _isActive;
+            set
+            {
+                if (_isActive != value)
+                {
+                    _isActive = value;
+                    OnPropertyChanged(nameof(IsActive));
+                }
+            }
+        }
+
         public string CharacterName
         {
             get
             {
-                if (string.IsNullOrEmpty(Title))
-                    return string.Empty;
+                var (name, _) = ParseCharacterMetadata();
+                return name;
+            }
+        }
 
-                string[] parts = Title.Split(new[] { " - " }, StringSplitOptions.RemoveEmptyEntries);
-                return parts.Length > 0 ? parts[0] : string.Empty;
+        public string AvatarInitial
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(CharacterName))
+                    return "?";
+
+                return CharacterName.Substring(0, 1).ToUpperInvariant();
             }
         }
 
@@ -255,11 +409,8 @@ namespace DofusTabs.Core
         {
             get
             {
-                if (string.IsNullOrEmpty(Title))
-                    return string.Empty;
-
-                string[] parts = Title.Split(new[] { " - " }, StringSplitOptions.RemoveEmptyEntries);
-                return parts.Length > 1 ? parts[1] : string.Empty;
+                var (_, className) = ParseCharacterMetadata();
+                return className;
             }
         }
 
@@ -358,6 +509,120 @@ namespace DofusTabs.Core
                 
                 return Title;
             }
+        }
+
+        private (string name, string className) ParseCharacterMetadata()
+        {
+            if (string.IsNullOrWhiteSpace(Title))
+            {
+                return (string.Empty, string.Empty);
+            }
+
+            var tokens = Regex.Split(Title, "\\s*(?:-|\\||–|—)\\s*")
+                .Select(t => t.Trim())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToList();
+
+            string className = string.Empty;
+
+            foreach (var token in tokens)
+            {
+                var resolved = ResolveCharacterClass(token);
+                if (!string.IsNullOrEmpty(resolved))
+                {
+                    className = resolved;
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(className))
+            {
+                className = ResolveCharacterClass(Title);
+            }
+
+            string name = tokens.FirstOrDefault(t => IsValidCharacterNameToken(t, className)) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(name) && tokens.Count > 0)
+            {
+                name = tokens[0];
+            }
+
+            return (name, className ?? string.Empty);
+        }
+
+        private static bool IsValidCharacterNameToken(string token, string className)
+        {
+            string normalized = NormalizeForMatch(token);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            if (IgnoredNameTokens.Any(t => normalized.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            var resolvedClass = ResolveCharacterClass(token);
+            if (!string.IsNullOrEmpty(resolvedClass))
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(className) && token.Equals(className, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string ResolveCharacterClass(string text)
+        {
+            string normalizedText = NormalizeForMatch(text);
+            if (string.IsNullOrWhiteSpace(normalizedText))
+            {
+                return string.Empty;
+            }
+
+            foreach (var alias in CharacterClassAliases)
+            {
+                if (ContainsWholeWord(normalizedText, alias.Key))
+                {
+                    return alias.Value;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static bool ContainsWholeWord(string text, string word)
+        {
+            return Regex.IsMatch(text, $@"(^|\\s){Regex.Escape(word)}($|\\s)", RegexOptions.IgnoreCase);
+        }
+
+        private static string NormalizeForMatch(string value)
+        {
+            string normalized = value.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder(normalized.Length);
+
+            foreach (char c in normalized)
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
+                {
+                    continue;
+                }
+
+                if (char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))
+                {
+                    sb.Append(char.ToLowerInvariant(c));
+                }
+                else
+                {
+                    sb.Append(' ');
+                }
+            }
+
+            return Regex.Replace(sb.ToString(), "\\s+", " ").Trim();
         }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
