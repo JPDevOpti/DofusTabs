@@ -47,8 +47,6 @@ namespace DofusTabs.UI
         private ListBoxItem? _sidebarDropTargetItem;
         private bool _sidebarDropInsertAfter;
         private IReadOnlyList<uint> _sidebarRenderedOrder = Array.Empty<uint>();
-        private readonly HashSet<uint> _optimizedBackgroundProcessIds = new();
-        private readonly Dictionary<uint, ProcessPriorityClass> _originalPriorityByProcessId = new();
 
         private static readonly SolidColorBrush SidebarDropTargetBrush = new(Color.FromArgb(70, 213, 193, 122));
 
@@ -98,10 +96,10 @@ namespace DofusTabs.UI
             _hotkeys.PrimaryRequested            += OnPrimaryRequested;
             _hotkeys.InstanceActivationRequested += OnInstanceActivationRequested;
 
-            GameHostPanel.Resize += (_, _) => _embedding.Resize(
-                Math.Max(1, GameHostPanel.ClientSize.Width),
-                Math.Max(1, GameHostPanel.ClientSize.Height));
+            GameHostPanel.Resize += (_, _) => RelayoutActiveForegroundGame();
             GameHostPanel.Enter += (_, _) => FocusCurrentEmbeddedWindow();
+            LocationChanged += (_, _) => RelayoutActiveForegroundGame();
+            SizeChanged += (_, _) => RelayoutActiveForegroundGame();
 
             _watcher.ProcessAppeared    += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
             _watcher.ProcessDisappeared += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
@@ -174,10 +172,10 @@ namespace DofusTabs.UI
 
             UpdateActiveFlags();
             UpdateSidebar();
-            UpdateBackgroundThrottleState();
 
             if (!_instances.Any())
             {
+                EmptyHostText.Text = "Abre clientes de Dofus y selecciona una cuenta en la sidebar";
                 EmptyHostText.Visibility = Visibility.Visible;
                 return;
             }
@@ -286,26 +284,18 @@ namespace DofusTabs.UI
                 return;
             }
 
-            bool embedded = _embedding.TryEmbed(
-                instance.ProcessId,
-                gameHandle,
-                GameHostPanel.Handle,
-                Math.Max(1, GameHostPanel.ClientSize.Width),
-                Math.Max(1, GameHostPanel.ClientSize.Height));
+            PrimeGameForeground(gameHandle);
 
-            if (!embedded)
-            {
-                AppLogger.Warn($"ActivateAccount: TryEmbed falló para pid={instance.ProcessId}");
-                return;
-            }
+            // Para evitar cap de FPS por "background app" en drivers NVIDIA,
+            // el cliente activo se deja top-level, pero acoplado visualmente al host.
+            _embedding.RestoreAll();
 
             _activeProcessId = instance.ProcessId;
             UpdateActiveFlags();
             UpdateSidebar();
-            UpdateBackgroundThrottleState();
             EmptyHostText.Visibility = Visibility.Collapsed;
             TryFocusEmbeddedWindow(gameHandle);
-            AppLogger.Info($"Cuenta activa: {instance.CharacterName} (pid={instance.ProcessId})");
+            AppLogger.Info($"Cuenta activa en primer plano acoplado: {instance.CharacterName} (pid={instance.ProcessId})");
         }
 
         private void ToggleSelectedAccountEnabledButton_Click(object sender, RoutedEventArgs e) =>
@@ -401,7 +391,6 @@ namespace DofusTabs.UI
             _activeProcessId = null;
             UpdateActiveFlags();
             UpdateSidebar();
-            UpdateBackgroundThrottleState();
             EmptyHostText.Visibility = Visibility.Visible;
         }
 
@@ -800,6 +789,17 @@ namespace DofusTabs.UI
             if (gameHandle == IntPtr.Zero)
                 return;
 
+            FocusEmbeddedWindowCore(gameHandle);
+            Dispatcher.BeginInvoke(
+                new Action(() => FocusEmbeddedWindowCore(gameHandle)),
+                System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        private void FocusEmbeddedWindowCore(IntPtr gameHandle)
+        {
+            if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
+                return;
+
             IntPtr mainHandle = new WindowInteropHelper(this).Handle;
             if (mainHandle == IntPtr.Zero)
                 return;
@@ -810,8 +810,106 @@ namespace DofusTabs.UI
                 return;
 
             EnsureGameThreadAttached(uiThreadId, gameThreadId);
-            User32.SetForegroundWindow(mainHandle);
+
+            bool attachedToForeground = TryAttachToForegroundThread(uiThreadId, gameThreadId, out uint foregroundThreadId);
+
+            User32.AllowSetForegroundWindow(User32.ASFW_ANY);
+            DockGameToHostArea(gameHandle, preserveZOrder: false);
+            User32.BringWindowToTop(gameHandle);
+            User32.SetForegroundWindow(gameHandle);
+            User32.SetActiveWindow(gameHandle);
             User32.SetFocus(gameHandle);
+            SendMainWindowBehindGame(mainHandle, gameHandle);
+
+            if (attachedToForeground)
+                User32.AttachThreadInput(uiThreadId, foregroundThreadId, false);
+        }
+
+        private void PrimeGameForeground(IntPtr gameHandle)
+        {
+            if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
+                return;
+
+            IntPtr mainHandle = new WindowInteropHelper(this).Handle;
+
+            uint uiThreadId = User32.GetCurrentThreadId();
+            uint gameThreadId = User32.GetWindowThreadProcessId(gameHandle, out _);
+            if (gameThreadId == 0)
+                return;
+
+            EnsureGameThreadAttached(uiThreadId, gameThreadId);
+            bool attachedToForeground = TryAttachToForegroundThread(uiThreadId, gameThreadId, out uint foregroundThreadId);
+
+            User32.AllowSetForegroundWindow(User32.ASFW_ANY);
+            DockGameToHostArea(gameHandle, preserveZOrder: false);
+            User32.BringWindowToTop(gameHandle);
+            User32.SetForegroundWindow(gameHandle);
+            User32.SetActiveWindow(gameHandle);
+            SendMainWindowBehindGame(mainHandle, gameHandle);
+
+            if (attachedToForeground)
+                User32.AttachThreadInput(uiThreadId, foregroundThreadId, false);
+        }
+
+        private void RelayoutActiveForegroundGame()
+        {
+            if (!_activeProcessId.HasValue)
+                return;
+
+            if (WindowState == WindowState.Minimized || !IsVisible)
+                return;
+
+            if (_discovery.TryGetWindowHandle(_activeProcessId.Value, out var gameHandle))
+                DockGameToHostArea(gameHandle, preserveZOrder: true);
+        }
+
+        private void DockGameToHostArea(IntPtr gameHandle, bool preserveZOrder)
+        {
+            if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
+                return;
+
+            int width = Math.Max(8, GameHostPanel.ClientSize.Width);
+            int height = Math.Max(8, GameHostPanel.ClientSize.Height);
+            if (width <= 8 || height <= 8)
+                return;
+
+            var topLeft = GameHostPanel.PointToScreen(Drawing.Point.Empty);
+            uint flags = User32.SWP_NOOWNERZORDER | User32.SWP_SHOWWINDOW;
+            if (preserveZOrder)
+                flags |= User32.SWP_NOZORDER;
+
+            User32.ShowWindow(gameHandle, User32.SW_RESTORE);
+            User32.SetWindowPos(gameHandle, IntPtr.Zero, topLeft.X, topLeft.Y, width, height, flags);
+        }
+
+        private static void SendMainWindowBehindGame(IntPtr mainHandle, IntPtr gameHandle)
+        {
+            if (mainHandle == IntPtr.Zero || !User32.IsWindow(mainHandle))
+                return;
+
+            if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
+                return;
+
+            User32.SetWindowPos(
+                mainHandle,
+                gameHandle,
+                0, 0, 0, 0,
+                User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER);
+        }
+
+        private static bool TryAttachToForegroundThread(uint uiThreadId, uint gameThreadId, out uint foregroundThreadId)
+        {
+            foregroundThreadId = 0;
+
+            IntPtr foregroundHandle = User32.GetForegroundWindow();
+            if (foregroundHandle == IntPtr.Zero)
+                return false;
+
+            foregroundThreadId = User32.GetWindowThreadProcessId(foregroundHandle, out _);
+            if (foregroundThreadId == 0 || foregroundThreadId == uiThreadId || foregroundThreadId == gameThreadId)
+                return false;
+
+            return User32.AttachThreadInput(uiThreadId, foregroundThreadId, true);
         }
 
         private void EnsureGameThreadAttached(uint uiThreadId, uint gameThreadId)
@@ -858,102 +956,6 @@ namespace DofusTabs.UI
                 .ThenBy(i => i.DisplayOrder)
                 .ThenBy(i => i.CharacterName)
                 .ToList();
-        }
-
-        private void UpdateBackgroundThrottleState()
-        {
-            if (!_activeProcessId.HasValue)
-            {
-                RestoreAllBackgroundOptimization();
-                return;
-            }
-
-            var knownPids = _instances.Select(i => i.ProcessId).ToHashSet();
-
-            foreach (var pid in _optimizedBackgroundProcessIds.ToList())
-            {
-                if (pid == _activeProcessId.Value || !knownPids.Contains(pid))
-                    RestoreBackgroundOptimization(pid);
-            }
-
-            foreach (var pid in knownPids)
-            {
-                if (pid == _activeProcessId.Value)
-                    continue;
-
-                ApplyBackgroundOptimization(pid);
-            }
-        }
-
-        private void ApplyBackgroundOptimization(uint processId)
-        {
-            try
-            {
-                using var process = Process.GetProcessById((int)processId);
-                if (process.HasExited)
-                    return;
-
-                if (!_originalPriorityByProcessId.ContainsKey(processId))
-                {
-                    try
-                    {
-                        _originalPriorityByProcessId[processId] = process.PriorityClass;
-                    }
-                    catch
-                    {
-                        _originalPriorityByProcessId[processId] = ProcessPriorityClass.Normal;
-                    }
-                }
-
-                try
-                {
-                    process.PriorityClass = ProcessPriorityClass.BelowNormal;
-                }
-                catch { }
-
-                ProcessControl.TrySetEcoQoS(processId, enabled: true);
-                _optimizedBackgroundProcessIds.Add(processId);
-            }
-            catch { }
-        }
-
-        private void RestoreBackgroundOptimization(uint processId)
-        {
-            try
-            {
-                using var process = Process.GetProcessById((int)processId);
-                if (!process.HasExited)
-                {
-                    if (_originalPriorityByProcessId.TryGetValue(processId, out var originalPriority))
-                    {
-                        try
-                        {
-                            process.PriorityClass = originalPriority;
-                        }
-                        catch { }
-                    }
-
-                    ProcessControl.TrySetEcoQoS(processId, enabled: false);
-                }
-            }
-            catch { }
-
-            _originalPriorityByProcessId.Remove(processId);
-            _optimizedBackgroundProcessIds.Remove(processId);
-        }
-
-        private void RestoreAllBackgroundOptimization()
-        {
-            foreach (var pid in _optimizedBackgroundProcessIds.ToList())
-                RestoreBackgroundOptimization(pid);
-
-            _originalPriorityByProcessId.Clear();
-            _optimizedBackgroundProcessIds.Clear();
-        }
-
-        private void StopBackgroundThrottle()
-        {
-            RestoreAllBackgroundOptimization();
         }
 
         private bool IsPrimaryInstance(GameInstance instance) =>
@@ -1032,7 +1034,6 @@ namespace DofusTabs.UI
                 _settingsWindow = null;
             }
 
-            StopBackgroundThrottle();
             DetachGameThread();
             _embedding.RestoreAll();
 

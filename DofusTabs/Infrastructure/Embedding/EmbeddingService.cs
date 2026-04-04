@@ -149,7 +149,7 @@ namespace DofusTabs.Infrastructure.Embedding
                         target.Handle,
                         IntPtr.Zero,
                         0, 0, w, h,
-                        User32.SWP_NOOWNERZORDER | User32.SWP_NOACTIVATE | User32.SWP_SHOWWINDOW);
+                        User32.SWP_NOOWNERZORDER | User32.SWP_SHOWWINDOW);
 
                     if (defer != IntPtr.Zero)
                     {
@@ -173,7 +173,7 @@ namespace DofusTabs.Infrastructure.Embedding
                     target.Handle,
                     IntPtr.Zero,
                     0, 0, w, h,
-                    User32.SWP_NOOWNERZORDER | User32.SWP_NOACTIVATE | User32.SWP_SHOWWINDOW);
+                    User32.SWP_NOOWNERZORDER | User32.SWP_SHOWWINDOW);
 
                 if (previous != null && User32.IsWindow(previous.Handle))
                     User32.ShowWindow(previous.Handle, User32.SW_HIDE);
