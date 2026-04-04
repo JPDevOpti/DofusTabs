@@ -47,6 +47,8 @@ namespace DofusTabs.UI
         private ListBoxItem? _sidebarDropTargetItem;
         private bool _sidebarDropInsertAfter;
         private IReadOnlyList<uint> _sidebarRenderedOrder = Array.Empty<uint>();
+        private readonly HashSet<uint> _optimizedBackgroundProcessIds = new();
+        private readonly Dictionary<uint, ProcessPriorityClass> _originalPriorityByProcessId = new();
 
         private static readonly SolidColorBrush SidebarDropTargetBrush = new(Color.FromArgb(70, 213, 193, 122));
 
@@ -172,6 +174,7 @@ namespace DofusTabs.UI
 
             UpdateActiveFlags();
             UpdateSidebar();
+            UpdateBackgroundThrottleState();
 
             if (!_instances.Any())
             {
@@ -299,6 +302,7 @@ namespace DofusTabs.UI
             _activeProcessId = instance.ProcessId;
             UpdateActiveFlags();
             UpdateSidebar();
+            UpdateBackgroundThrottleState();
             EmptyHostText.Visibility = Visibility.Collapsed;
             TryFocusEmbeddedWindow(gameHandle);
             AppLogger.Info($"Cuenta activa: {instance.CharacterName} (pid={instance.ProcessId})");
@@ -397,6 +401,7 @@ namespace DofusTabs.UI
             _activeProcessId = null;
             UpdateActiveFlags();
             UpdateSidebar();
+            UpdateBackgroundThrottleState();
             EmptyHostText.Visibility = Visibility.Visible;
         }
 
@@ -855,6 +860,102 @@ namespace DofusTabs.UI
                 .ToList();
         }
 
+        private void UpdateBackgroundThrottleState()
+        {
+            if (!_activeProcessId.HasValue)
+            {
+                RestoreAllBackgroundOptimization();
+                return;
+            }
+
+            var knownPids = _instances.Select(i => i.ProcessId).ToHashSet();
+
+            foreach (var pid in _optimizedBackgroundProcessIds.ToList())
+            {
+                if (pid == _activeProcessId.Value || !knownPids.Contains(pid))
+                    RestoreBackgroundOptimization(pid);
+            }
+
+            foreach (var pid in knownPids)
+            {
+                if (pid == _activeProcessId.Value)
+                    continue;
+
+                ApplyBackgroundOptimization(pid);
+            }
+        }
+
+        private void ApplyBackgroundOptimization(uint processId)
+        {
+            try
+            {
+                using var process = Process.GetProcessById((int)processId);
+                if (process.HasExited)
+                    return;
+
+                if (!_originalPriorityByProcessId.ContainsKey(processId))
+                {
+                    try
+                    {
+                        _originalPriorityByProcessId[processId] = process.PriorityClass;
+                    }
+                    catch
+                    {
+                        _originalPriorityByProcessId[processId] = ProcessPriorityClass.Normal;
+                    }
+                }
+
+                try
+                {
+                    process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                }
+                catch { }
+
+                ProcessControl.TrySetEcoQoS(processId, enabled: true);
+                _optimizedBackgroundProcessIds.Add(processId);
+            }
+            catch { }
+        }
+
+        private void RestoreBackgroundOptimization(uint processId)
+        {
+            try
+            {
+                using var process = Process.GetProcessById((int)processId);
+                if (!process.HasExited)
+                {
+                    if (_originalPriorityByProcessId.TryGetValue(processId, out var originalPriority))
+                    {
+                        try
+                        {
+                            process.PriorityClass = originalPriority;
+                        }
+                        catch { }
+                    }
+
+                    ProcessControl.TrySetEcoQoS(processId, enabled: false);
+                }
+            }
+            catch { }
+
+            _originalPriorityByProcessId.Remove(processId);
+            _optimizedBackgroundProcessIds.Remove(processId);
+        }
+
+        private void RestoreAllBackgroundOptimization()
+        {
+            foreach (var pid in _optimizedBackgroundProcessIds.ToList())
+                RestoreBackgroundOptimization(pid);
+
+            _originalPriorityByProcessId.Clear();
+            _optimizedBackgroundProcessIds.Clear();
+        }
+
+        private void StopBackgroundThrottle()
+        {
+            RestoreAllBackgroundOptimization();
+        }
+
         private bool IsPrimaryInstance(GameInstance instance) =>
             !string.IsNullOrWhiteSpace(_primaryCharacterName) &&
             string.Equals(GetPrimaryIdentity(instance), _primaryCharacterName, StringComparison.OrdinalIgnoreCase);
@@ -931,6 +1032,7 @@ namespace DofusTabs.UI
                 _settingsWindow = null;
             }
 
+            StopBackgroundThrottle();
             DetachGameThread();
             _embedding.RestoreAll();
 
