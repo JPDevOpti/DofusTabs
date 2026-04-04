@@ -47,6 +47,7 @@ namespace DofusTabs.UI
         private ListBoxItem? _sidebarDropTargetItem;
         private bool _sidebarDropInsertAfter;
         private IReadOnlyList<uint> _sidebarRenderedOrder = Array.Empty<uint>();
+        private readonly Dictionary<uint, (IntPtr Style, IntPtr ExStyle)> _foregroundDockOriginalStyles = new();
 
         private static readonly SolidColorBrush SidebarDropTargetBrush = new(Color.FromArgb(70, 213, 193, 122));
 
@@ -161,6 +162,9 @@ namespace DofusTabs.UI
             _instances = SortSidebarInstances(_discovery.GetSnapshot());
 
             var activePids = _instances.Select(i => i.ProcessId).ToHashSet();
+            foreach (var pid in _foregroundDockOriginalStyles.Keys.Except(activePids).ToList())
+                _foregroundDockOriginalStyles.Remove(pid);
+
             foreach (var pid in _embedding.EmbeddedProcessIds)
             {
                 if (!activePids.Contains(pid))
@@ -314,7 +318,10 @@ namespace DofusTabs.UI
                 _hotkeys.UnregisterForInstance(selected.ProcessId);
 
                 if (_activeProcessId == selected.ProcessId)
+                {
+                    RestoreDockedGameStyle(selected.ProcessId);
                     _activeProcessId = null;
+                }
             }
             else if (selected.IndividualHotkey != null && !selected.IndividualHotkey.IsEmpty)
             {
@@ -386,7 +393,10 @@ namespace DofusTabs.UI
         {
             DetachGameThread();
             if (_activeProcessId.HasValue)
+            {
+                RestoreDockedGameStyle(_activeProcessId.Value);
                 _embedding.Restore(_activeProcessId.Value);
+            }
 
             _activeProcessId = null;
             UpdateActiveFlags();
@@ -868,6 +878,8 @@ namespace DofusTabs.UI
             if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
                 return;
 
+            EnsureBorderlessDockStyle(gameHandle);
+
             int width = Math.Max(8, GameHostPanel.ClientSize.Width);
             int height = Math.Max(8, GameHostPanel.ClientSize.Height);
             if (width <= 8 || height <= 8)
@@ -878,8 +890,88 @@ namespace DofusTabs.UI
             if (preserveZOrder)
                 flags |= User32.SWP_NOZORDER;
 
-            User32.ShowWindow(gameHandle, User32.SW_RESTORE);
+            if (User32.IsIconic(gameHandle))
+            {
+                User32.ShowWindow(gameHandle, User32.SW_RESTORE);
+            }
+            else if (!preserveZOrder)
+            {
+                User32.ShowWindow(gameHandle, User32.SW_SHOW);
+            }
+
             User32.SetWindowPos(gameHandle, IntPtr.Zero, topLeft.X, topLeft.Y, width, height, flags);
+        }
+
+        private void EnsureBorderlessDockStyle(IntPtr gameHandle)
+        {
+            if (gameHandle == IntPtr.Zero || !User32.IsWindow(gameHandle))
+                return;
+
+            User32.GetWindowThreadProcessId(gameHandle, out uint processId);
+            if (processId == 0)
+                return;
+
+            if (!_foregroundDockOriginalStyles.ContainsKey(processId))
+            {
+                _foregroundDockOriginalStyles[processId] = (
+                    User32.GetWindowLong(gameHandle, User32.GWL_STYLE),
+                    User32.GetWindowLong(gameHandle, User32.GWL_EXSTYLE));
+            }
+
+            long currentStyle = User32.GetWindowLong(gameHandle, User32.GWL_STYLE).ToInt64();
+            long targetStyle = currentStyle;
+            targetStyle &= ~User32.WS_CAPTION;
+            targetStyle &= ~User32.WS_THICKFRAME;
+            targetStyle &= ~User32.WS_MINIMIZEBOX;
+            targetStyle &= ~User32.WS_MAXIMIZEBOX;
+            targetStyle &= ~User32.WS_SYSMENU;
+            targetStyle &= ~User32.WS_BORDER;
+
+            long currentExStyle = User32.GetWindowLong(gameHandle, User32.GWL_EXSTYLE).ToInt64();
+            long targetExStyle = currentExStyle;
+            targetExStyle &= ~User32.WS_EX_DLGMODALFRAME;
+            targetExStyle &= ~User32.WS_EX_CLIENTEDGE;
+            targetExStyle &= ~User32.WS_EX_STATICEDGE;
+
+            if (targetStyle == currentStyle && targetExStyle == currentExStyle)
+                return;
+
+            User32.SetWindowLong(gameHandle, User32.GWL_STYLE, new IntPtr(targetStyle));
+            User32.SetWindowLong(gameHandle, User32.GWL_EXSTYLE, new IntPtr(targetExStyle));
+            User32.SetWindowPos(
+                gameHandle,
+                IntPtr.Zero,
+                0, 0, 0, 0,
+                User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOZORDER |
+                User32.SWP_NOOWNERZORDER | User32.SWP_FRAMECHANGED);
+        }
+
+        private void RestoreDockedGameStyle(uint processId)
+        {
+            if (!_foregroundDockOriginalStyles.TryGetValue(processId, out var original))
+                return;
+
+            if (_discovery.TryGetWindowHandle(processId, out var gameHandle) &&
+                gameHandle != IntPtr.Zero &&
+                User32.IsWindow(gameHandle))
+            {
+                User32.SetWindowLong(gameHandle, User32.GWL_STYLE, original.Style);
+                User32.SetWindowLong(gameHandle, User32.GWL_EXSTYLE, original.ExStyle);
+                User32.SetWindowPos(
+                    gameHandle,
+                    IntPtr.Zero,
+                    0, 0, 0, 0,
+                    User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOZORDER |
+                    User32.SWP_NOOWNERZORDER | User32.SWP_FRAMECHANGED);
+            }
+
+            _foregroundDockOriginalStyles.Remove(processId);
+        }
+
+        private void RestoreAllDockedGameStyles()
+        {
+            foreach (var pid in _foregroundDockOriginalStyles.Keys.ToList())
+                RestoreDockedGameStyle(pid);
         }
 
         private static void SendMainWindowBehindGame(IntPtr mainHandle, IntPtr gameHandle)
@@ -1035,6 +1127,7 @@ namespace DofusTabs.UI
             }
 
             DetachGameThread();
+            RestoreAllDockedGameStyles();
             _embedding.RestoreAll();
 
             _watcher.Stop();
