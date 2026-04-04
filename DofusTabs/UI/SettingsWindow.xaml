@@ -1,0 +1,138 @@
+<Window x:Class="DofusTabs.UI.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configuracion"
+        Height="430"
+        Width="520"
+        MinHeight="430"
+        MinWidth="520"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        Icon="/Resources/Icon.png"
+        Background="#131515"
+        Foreground="#E5E8E8">
+    <Window.Resources>
+        <Style x:Key="SettingsActionButtonStyle" TargetType="Button">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Background" Value="#2A2F2F"/>
+            <Setter Property="Foreground" Value="#E5E8E8"/>
+            <Setter Property="BorderBrush" Value="#3E4545"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#384040"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#222626"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Panel de configuracion"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,10"/>
+
+        <Border Grid.Row="1"
+                Background="#202424"
+                BorderBrush="#353B3B"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="10"
+                Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="Cuenta seleccionada" FontWeight="SemiBold" FontSize="13"/>
+                <TextBlock x:Name="SelectedAccountText" Text="Sin cuenta seleccionada" Margin="0,6,0,2" FontSize="13"/>
+                <TextBlock x:Name="SelectedAccountStateText" Text="Selecciona una cuenta en la sidebar" Foreground="#B9C1C1" FontSize="12"/>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Background="#1B1E1E"
+                    BorderBrush="#353B3B"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="10"
+                    Margin="0,0,6,0">
+                <StackPanel>
+                    <TextBlock Text="Cuenta" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <Button x:Name="ToggleEnableButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleEnableButton_Click" Content="Habilitar cuenta"/>
+                    <Button x:Name="MoveUpButton" Style="{StaticResource SettingsActionButtonStyle}" Click="MoveUpButton_Click" Content="Subir en orden"/>
+                    <Button x:Name="MoveDownButton" Style="{StaticResource SettingsActionButtonStyle}" Click="MoveDownButton_Click" Margin="0,0,0,0" Content="Bajar en orden"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="1"
+                    Background="#1B1E1E"
+                    BorderBrush="#353B3B"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="10"
+                    Margin="6,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Overlay" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <Button x:Name="ToggleOverlayButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleOverlayButton_Click" Content="Mostrar overlay"/>
+                    <Button x:Name="ToggleOverlayCompactButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleOverlayCompactButton_Click" Content="Modo compacto"/>
+                    <TextBlock x:Name="OverlayStateText" Text="Overlay oculto" Foreground="#B9C1C1" FontSize="12" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="3"
+                Background="#151717"
+                BorderBrush="#2A3030"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="10"
+                Margin="0,0,0,10">
+            <TextBlock Text="Estas acciones se aplican a la cuenta que selecciones en la sidebar principal."
+                       TextWrapping="Wrap"
+                       Foreground="#B9C1C1"
+                       FontSize="12"/>
+        </Border>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CloseButton"
+                    Style="{StaticResource SettingsActionButtonStyle}"
+                    Margin="0"
+                    Width="120"
+                    Click="CloseButton_Click"
+                    Content="Cerrar"/>
+        </StackPanel>
+    </Grid>
+</Window>

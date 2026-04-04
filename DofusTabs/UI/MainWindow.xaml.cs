@@ -5,7 +5,11 @@ using System.Diagnostics;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using DofusTabs.Core;
+using DofusTabs.Application.Services;
+using DofusTabs.Application.Settings;
+using DofusTabs.Diagnostics;
+using DofusTabs.Domain;
+using DofusTabs.Infrastructure.Discovery;
 using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 
@@ -13,225 +17,535 @@ namespace DofusTabs.UI
 {
     public partial class MainWindow : Window
     {
-        private readonly WindowManager _windowManager;
-        private readonly WindowEmbeddingService _windowEmbeddingService;
-        private List<WindowInfo> _detectedWindows = new List<WindowInfo>();
-        private List<WindowInfo> _sidebarWindows = new List<WindowInfo>();
+        private readonly IGameDiscoveryService _discovery;
+        private readonly IEmbeddingService _embedding;
+        private readonly IHotkeyService _hotkeys;
+        private readonly ISettingsService _settings;
+        private readonly IProcessWatcher _watcher;
+        private readonly GameDiscoveryService _discoveryImpl;
+
+        private List<GameInstance> _instances = new();
         private uint? _activeProcessId;
         private Forms.NotifyIcon? _notifyIcon;
+        private OverlayWindow? _overlayWindow;
+        private SettingsWindow? _settingsWindow;
         private bool _isExiting;
         private bool _exitConfirmed;
 
-        public MainWindow()
+        public MainWindow(
+            IGameDiscoveryService discovery,
+            IEmbeddingService embedding,
+            IHotkeyService hotkeys,
+            ISettingsService settings,
+            IProcessWatcher watcher)
         {
+            _discovery     = discovery;
+            _embedding     = embedding;
+            _hotkeys       = hotkeys;
+            _settings      = settings;
+            _watcher       = watcher;
+            _discoveryImpl = (GameDiscoveryService)discovery;
+
             InitializeComponent();
-
-            _windowManager = new WindowManager();
-            _windowEmbeddingService = new WindowEmbeddingService();
-
             SetupTrayIcon();
 
-            Loaded += MainWindow_Loaded;
+            Loaded       += MainWindow_Loaded;
             StateChanged += MainWindow_StateChanged;
         }
 
+        // ── Inicialización ───────────────────────────────────────────────────
+
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            GameHostPanel.Resize += (_, _) => ResizeEmbeddedClient();
-            RefreshDetectedWindows(selectFallbackAccount: true);
+            // Inicializar hotkeys (necesita el HWND, disponible solo después de Loaded)
+            _hotkeys.Initialize(this);
+
+            var savedSettings = _settings.Load();
+
+            // Registrar hotkeys globales con los bindings guardados
+            _hotkeys.Register(_hotkeys.NextHotkeyId,     savedSettings.NextHotkey);
+            _hotkeys.Register(_hotkeys.PreviousHotkeyId, savedSettings.PreviousHotkey);
+
+            _hotkeys.NextRequested               += OnNextRequested;
+            _hotkeys.PreviousRequested           += OnPreviousRequested;
+            _hotkeys.InstanceActivationRequested += OnInstanceActivationRequested;
+
+            GameHostPanel.Resize += (_, _) => _embedding.Resize(
+                Math.Max(1, GameHostPanel.ClientSize.Width),
+                Math.Max(1, GameHostPanel.ClientSize.Height));
+
+            _watcher.ProcessAppeared    += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
+            _watcher.ProcessDisappeared += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
+            _watcher.Start();
+
+            // Primer refresh + aplicar configuración guardada
+            Refresh(selectFallback: true);
+            _discoveryImpl.ApplyPersistedSettings(savedSettings.Instances);
+            ApplyPerInstanceHotkeys(savedSettings.Instances);
+            Refresh(selectFallback: !_activeProcessId.HasValue);
+            InitializeOverlay(savedSettings);
+            UpdateSettingsWindowState();
+
+            AppLogger.Info("MainWindow cargada");
         }
 
-        private void SetupTrayIcon()
+        // ── Hotkeys ──────────────────────────────────────────────────────────
+
+        private void OnNextRequested()
         {
-            _notifyIcon = new Forms.NotifyIcon();
-            try
-            {
-                var exePath = Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                if (!string.IsNullOrWhiteSpace(exePath))
-                {
-                    _notifyIcon.Icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
-                }
-            }
-            catch
-            {
-                // Si no se puede extraer icono, se mantiene el icono por defecto.
-            }
-
-            _notifyIcon.Text = "DofusMaster (en ejecución)";
-            _notifyIcon.Visible = true;
-            _notifyIcon.DoubleClick += (_, _) => RestoreFromTray();
-
-            var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add("Mostrar", null, (_, _) => RestoreFromTray());
-            menu.Items.Add("Salir", null, (_, _) => ExitFromTray());
-            _notifyIcon.ContextMenuStrip = menu;
+            var enabled = _instances.Where(i => i.IsEnabled).OrderBy(i => i.DisplayOrder).ToList();
+            if (!enabled.Any()) return;
+            int idx = enabled.FindIndex(i => i.ProcessId == _activeProcessId);
+            int next = (idx + 1) % enabled.Count;
+            Dispatcher.Invoke(() => ActivateAccount(enabled[next]));
         }
 
-        private void RefreshButton_Click(object sender, RoutedEventArgs e)
+        private void OnPreviousRequested()
         {
-            RefreshDetectedWindows(selectFallbackAccount: true);
+            var enabled = _instances.Where(i => i.IsEnabled).OrderBy(i => i.DisplayOrder).ToList();
+            if (!enabled.Any()) return;
+            int idx = enabled.FindIndex(i => i.ProcessId == _activeProcessId);
+            int prev = (idx - 1 + enabled.Count) % enabled.Count;
+            Dispatcher.Invoke(() => ActivateAccount(enabled[prev]));
         }
 
-        private void RefreshDetectedWindows(bool selectFallbackAccount)
+        private void OnInstanceActivationRequested(uint processId)
         {
-            _detectedWindows = _windowManager
-                .GetDofusWindows()
-                .OrderBy(w => w.DisplayOrder)
-                .ThenBy(w => w.CharacterName)
+            var instance = _instances.FirstOrDefault(i => i.ProcessId == processId);
+            if (instance != null)
+                Dispatcher.Invoke(() => ActivateAccount(instance));
+        }
+
+        // ── Refresh ──────────────────────────────────────────────────────────
+
+        private void RefreshButton_Click(object sender, RoutedEventArgs e) =>
+            Refresh(selectFallback: true);
+
+        private void Refresh(bool selectFallback)
+        {
+            _instances = _discovery
+                .GetSnapshot()
+                .OrderBy(i => i.DisplayOrder)
+                .ThenBy(i => i.CharacterName)
                 .ToList();
 
-            if (_activeProcessId.HasValue && !_detectedWindows.Any(w => w.ProcessId == _activeProcessId.Value))
+            // Si la cuenta activa ya no existe, liberar embedding
+            if (_activeProcessId.HasValue && !_instances.Any(i => i.ProcessId == _activeProcessId.Value))
             {
+                _embedding.Restore(_activeProcessId.Value);
                 _activeProcessId = null;
-                _windowEmbeddingService.RestoreEmbeddedWindow();
             }
 
             UpdateActiveFlags();
-            UpdateSidebarBubbleSource();
+            UpdateSidebar();
+            SyncOverlayInstances();
 
-            if (!_detectedWindows.Any())
+            if (!_instances.Any())
             {
-                HostTitleText.Text = "Cliente Activo";
-                StatusTextBlock.Text = "No se detectaron clientes de Dofus";
                 EmptyHostText.Visibility = Visibility.Visible;
                 return;
             }
 
-            if (selectFallbackAccount && !_activeProcessId.HasValue)
+            if (selectFallback && !_activeProcessId.HasValue)
             {
-                ActivateAccount(_detectedWindows[0]);
-            }
-            else if (_activeProcessId.HasValue)
-            {
-                var activeWindow = _detectedWindows.FirstOrDefault(w => w.ProcessId == _activeProcessId.Value);
-                if (activeWindow != null)
-                {
-                    HostTitleText.Text = $"{activeWindow.CharacterName} - {activeWindow.CharacterClass}";
-                    StatusTextBlock.Text = $"Activo: {activeWindow.CharacterName}";
-                    EmptyHostText.Visibility = Visibility.Collapsed;
-                }
+                var fallback = _instances
+                    .Where(i => i.IsEnabled)
+                    .OrderBy(i => i.DisplayOrder)
+                    .FirstOrDefault();
+
+                if (fallback != null)
+                    ActivateAccount(fallback);
             }
         }
+
+        // ── Activación de cuenta ─────────────────────────────────────────────
 
         private void AccountBubble_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button button && button.Tag is WindowInfo windowInfo)
+            if (sender is Button btn && btn.Tag is GameInstance instance)
             {
-                ActivateAccount(windowInfo);
+                AccountsListBox.SelectedItem = instance;
+                if (!instance.IsEnabled)
+                    return;
+
+                ActivateAccount(instance);
             }
         }
 
-        private void ActivateAccount(WindowInfo windowInfo)
+        private void ActivateAccount(GameInstance instance)
         {
-            if (windowInfo.Handle == IntPtr.Zero)
+            if (!instance.IsEnabled)
+                return;
+
+            if (!_discovery.TryGetWindowHandle(instance.ProcessId, out var gameHandle))
             {
-                StatusTextBlock.Text = "No se puede activar la cuenta seleccionada";
+                AppLogger.Warn($"ActivateAccount: handle no encontrado para pid={instance.ProcessId}");
                 return;
             }
 
-            bool embedded = _windowEmbeddingService.TryEmbed(
-                windowInfo,
+            bool embedded = _embedding.TryEmbed(
+                instance.ProcessId,
+                gameHandle,
                 GameHostPanel.Handle,
                 Math.Max(1, GameHostPanel.ClientSize.Width),
                 Math.Max(1, GameHostPanel.ClientSize.Height));
 
             if (!embedded)
             {
-                StatusTextBlock.Text = "No se pudo embeber la ventana seleccionada";
+                AppLogger.Warn($"ActivateAccount: TryEmbed falló para pid={instance.ProcessId}");
                 return;
             }
 
-            _activeProcessId = windowInfo.ProcessId;
+            _activeProcessId = instance.ProcessId;
             UpdateActiveFlags();
-            UpdateSidebarBubbleSource();
-
-            HostTitleText.Text = $"{windowInfo.CharacterName} - {windowInfo.CharacterClass}";
-            StatusTextBlock.Text = $"Cuenta activa: {windowInfo.CharacterName}";
+            UpdateSidebar();
             EmptyHostText.Visibility = Visibility.Collapsed;
+            AppLogger.Info($"Cuenta activa: {instance.CharacterName} (pid={instance.ProcessId})");
+        }
+
+        private void ToggleSelectedAccountEnabledButton_Click(object sender, RoutedEventArgs e) =>
+            ToggleSelectedAccountEnabled();
+
+        private void ToggleSelectedAccountEnabled()
+        {
+            var selected = GetSelectedInstance();
+            if (selected == null)
+                return;
+
+            selected.IsEnabled = !selected.IsEnabled;
+
+            if (!selected.IsEnabled)
+            {
+                _hotkeys.UnregisterForInstance(selected.ProcessId);
+
+                if (_activeProcessId == selected.ProcessId)
+                {
+                    _embedding.Restore(selected.ProcessId);
+                    _activeProcessId = null;
+                }
+            }
+            else if (selected.IndividualHotkey != null && !selected.IndividualHotkey.IsEmpty)
+            {
+                _hotkeys.RegisterForInstance(selected.ProcessId, selected.IndividualHotkey);
+            }
+
+            UpdateActiveFlags();
+            UpdateSidebar();
+            SyncOverlayInstances();
+
+            if (!_activeProcessId.HasValue)
+            {
+                var fallback = _instances
+                    .Where(i => i.IsEnabled)
+                    .OrderBy(i => i.DisplayOrder)
+                    .FirstOrDefault();
+
+                if (fallback != null)
+                {
+                    ActivateAccount(fallback);
+                }
+                else
+                {
+                    EmptyHostText.Visibility = Visibility.Visible;
+                }
+            }
+
+            PersistInteractiveState("toggle enable");
+            UpdateSettingsWindowState();
+        }
+
+        private void MoveAccountUpButton_Click(object sender, RoutedEventArgs e) =>
+            MoveSelectedAccount(delta: -1);
+
+        private void MoveAccountDownButton_Click(object sender, RoutedEventArgs e) =>
+            MoveSelectedAccount(delta: 1);
+
+        private void MoveSelectedAccount(int delta)
+        {
+            var selected = GetSelectedInstance();
+            if (selected == null)
+                return;
+
+            var ordered = _instances
+                .OrderBy(i => i.DisplayOrder)
+                .ThenBy(i => i.CharacterName)
+                .ToList();
+
+            int currentIndex = ordered.FindIndex(i => i.ProcessId == selected.ProcessId);
+            if (currentIndex < 0)
+                return;
+
+            int targetIndex = currentIndex + delta;
+            if (targetIndex < 0 || targetIndex >= ordered.Count)
+                return;
+
+            (ordered[currentIndex], ordered[targetIndex]) = (ordered[targetIndex], ordered[currentIndex]);
+
+            for (int i = 0; i < ordered.Count; i++)
+                ordered[i].DisplayOrder = i;
+
+            _instances = ordered;
+            UpdateSidebar();
+            AccountsListBox.SelectedItem = _instances.FirstOrDefault(i => i.ProcessId == selected.ProcessId);
+            SyncOverlayInstances();
+            PersistInteractiveState(delta < 0 ? "move up" : "move down");
+            UpdateSettingsWindowState();
+        }
+
+        private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e) =>
+            ToggleOverlayVisibility();
+
+        private void ToggleOverlayVisibility()
+        {
+            EnsureOverlayWindow();
+            if (_overlayWindow == null)
+                return;
+
+            if (_overlayWindow.IsVisible)
+            {
+                _overlayWindow.Hide();
+            }
+            else
+            {
+                SyncOverlayInstances();
+                _overlayWindow.Show();
+            }
+
+            PersistInteractiveState("toggle overlay");
+            UpdateSettingsWindowState();
+        }
+
+        private void ToggleOverlayCompactMode()
+        {
+            EnsureOverlayWindow();
+            if (_overlayWindow == null)
+                return;
+
+            _overlayWindow.SetCompactMode(!_overlayWindow.IsCompact);
+            PersistInteractiveState("toggle overlay compact");
+            UpdateSettingsWindowState();
         }
 
         private void RestoreEmbeddedClientButton_Click(object sender, RoutedEventArgs e)
         {
-            _windowEmbeddingService.RestoreEmbeddedWindow();
+            if (_activeProcessId.HasValue)
+                _embedding.Restore(_activeProcessId.Value);
+
             _activeProcessId = null;
             UpdateActiveFlags();
-            UpdateSidebarBubbleSource();
-
-            HostTitleText.Text = "Cliente Activo";
-            StatusTextBlock.Text = "Cliente restaurado a su ventana original";
+            UpdateSidebar();
             EmptyHostText.Visibility = Visibility.Visible;
         }
 
+        // ── Settings ─────────────────────────────────────────────────────────
+
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show(
-                "Panel de configuración en construcción.\n\n" +
-                "Próximo paso: hotkeys, temas y grupos de cuentas.",
-                "Ajustes",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            OpenSettingsWindow();
         }
 
-        private void ResizeEmbeddedClient()
+        private void ApplyPerInstanceHotkeys(List<InstanceSettings> saved)
         {
-            _windowEmbeddingService.ResizeEmbeddedWindow(
-                Math.Max(1, GameHostPanel.ClientSize.Width),
-                Math.Max(1, GameHostPanel.ClientSize.Height));
+            foreach (var s in saved)
+            {
+                if (s.IndividualHotkey != null && !s.IndividualHotkey.IsEmpty)
+                    _hotkeys.RegisterForInstance(s.ProcessId, s.IndividualHotkey);
+            }
         }
 
-        private void UpdateCounters()
-        {
-            AccountsSummaryText.Text = $"{_detectedWindows.Count} cuentas";
-        }
+        // ── UI helpers ───────────────────────────────────────────────────────
 
         private void UpdateActiveFlags()
         {
-            foreach (var window in _detectedWindows)
-            {
-                window.IsActive = _activeProcessId.HasValue && window.ProcessId == _activeProcessId.Value;
-            }
+            foreach (var inst in _instances)
+                inst.IsActive = _activeProcessId.HasValue && inst.ProcessId == _activeProcessId.Value;
 
-            UpdateCounters();
+            AccountsSummaryText.Text = $"{_instances.Count} cuentas";
         }
 
-        private void UpdateSidebarBubbleSource()
+        private void UpdateSidebar()
         {
-            WindowInfo? sidebarWindow = null;
+            _instances = _instances
+                .OrderBy(i => i.DisplayOrder)
+                .ThenBy(i => i.CharacterName)
+                .ToList();
+
+            var selectedProcessId = (AccountsListBox.SelectedItem as GameInstance)?.ProcessId;
+
+            AccountsListBox.ItemsSource = null;
+            AccountsListBox.ItemsSource = _instances;
 
             if (_activeProcessId.HasValue)
             {
-                sidebarWindow = _detectedWindows.FirstOrDefault(w => w.ProcessId == _activeProcessId.Value);
+                var active = _instances.FirstOrDefault(i => i.ProcessId == _activeProcessId.Value);
+                if (active != null)
+                    AccountsListBox.SelectedItem = active;
             }
-
-            if (sidebarWindow == null && _detectedWindows.Count > 0)
+            else if (selectedProcessId.HasValue)
             {
-                sidebarWindow = _detectedWindows[0];
+                var selected = _instances.FirstOrDefault(i => i.ProcessId == selectedProcessId.Value);
+                if (selected != null)
+                    AccountsListBox.SelectedItem = selected;
             }
 
-            _sidebarWindows = sidebarWindow != null
-                ? new List<WindowInfo> { sidebarWindow }
-                : new List<WindowInfo>();
-
-            AccountsListBox.ItemsSource = null;
-            AccountsListBox.ItemsSource = _sidebarWindows;
-            AccountsListBox.SelectedItem = _sidebarWindows.FirstOrDefault();
+            UpdateSettingsWindowState();
         }
 
-        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        private void AccountsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+            UpdateSettingsWindowState();
+
+        private void OpenSettingsWindow()
         {
-            if (WindowState == WindowState.Minimized && !_isExiting)
+            EnsureOverlayWindow();
+
+            if (_settingsWindow != null)
             {
-                Hide();
-                ShowInTaskbar = false;
-                if (_notifyIcon != null)
-                {
-                    _notifyIcon.Visible = true;
-                }
+                UpdateSettingsWindowState();
+                _settingsWindow.Show();
+                _settingsWindow.Activate();
+                return;
             }
-            else if (WindowState == WindowState.Normal)
+
+            _settingsWindow = new SettingsWindow(
+                onToggleEnable: ToggleSelectedAccountEnabled,
+                onMoveUp: () => MoveSelectedAccount(-1),
+                onMoveDown: () => MoveSelectedAccount(1),
+                onToggleOverlay: ToggleOverlayVisibility,
+                onToggleOverlayCompact: ToggleOverlayCompactMode)
             {
-                ShowInTaskbar = true;
+                Owner = this
+            };
+
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+
+            UpdateSettingsWindowState();
+            _settingsWindow.Show();
+            _settingsWindow.Activate();
+        }
+
+        private SettingsViewState BuildSettingsViewState()
+        {
+            var selected = AccountsListBox.SelectedItem as GameInstance;
+            var ordered = _instances
+                .OrderBy(i => i.DisplayOrder)
+                .ThenBy(i => i.CharacterName)
+                .ToList();
+
+            int selectedIndex = selected == null
+                ? -1
+                : ordered.FindIndex(i => i.ProcessId == selected.ProcessId);
+
+            bool hasSelected = selected != null;
+            string selectedLabel = hasSelected
+                ? $"{selected!.CharacterName} ({selected.CharacterClass})"
+                : "Sin cuenta seleccionada";
+
+            string selectedState = hasSelected
+                ? (selected!.IsEnabled ? "Habilitada en la rotación" : "Deshabilitada en la rotación")
+                : "Selecciona una burbuja en la sidebar";
+
+            return new SettingsViewState
+            {
+                SelectedAccountLabel = selectedLabel,
+                SelectedAccountStateLabel = selectedState,
+                HasSelectedAccount = hasSelected,
+                SelectedAccountEnabled = selected?.IsEnabled ?? false,
+                CanMoveUp = hasSelected && selectedIndex > 0,
+                CanMoveDown = hasSelected && selectedIndex >= 0 && selectedIndex < ordered.Count - 1,
+                OverlayVisible = _overlayWindow?.IsVisible == true,
+                OverlayCompact = _overlayWindow?.IsCompact == true,
+            };
+        }
+
+        private void UpdateSettingsWindowState()
+        {
+            if (_settingsWindow == null)
+                return;
+
+            _settingsWindow.UpdateState(BuildSettingsViewState());
+        }
+
+        private void InitializeOverlay(AppSettings savedSettings)
+        {
+            EnsureOverlayWindow();
+            if (_overlayWindow == null)
+                return;
+
+            _overlayWindow.SetCompactMode(savedSettings.OverlayCompact);
+
+            if (savedSettings.OverlayX >= 0 && savedSettings.OverlayY >= 0)
+            {
+                _overlayWindow.SetPosition(savedSettings.OverlayX, savedSettings.OverlayY);
             }
+            else
+            {
+                _overlayWindow.SetPosition(Left + Width + 12, Top + 20);
+            }
+
+            SyncOverlayInstances();
+
+            if (savedSettings.OverlayVisible)
+                _overlayWindow.Show();
+        }
+
+        private void EnsureOverlayWindow()
+        {
+            if (_overlayWindow != null)
+                return;
+
+            _overlayWindow = new OverlayWindow(_discovery)
+            {
+                Owner = this
+            };
+
+            _overlayWindow.OnOverlayHidden += () => PersistInteractiveState("overlay hidden");
+            _overlayWindow.OnCompactChanged += _ => PersistInteractiveState("overlay compact");
+            _overlayWindow.LocationChanged += (_, _) =>
+            {
+                if (_overlayWindow.IsVisible)
+                    PersistInteractiveState("overlay moved");
+            };
+            _overlayWindow.Closed += (_, _) => _overlayWindow = null;
+        }
+
+        private void SyncOverlayInstances()
+        {
+            if (_overlayWindow == null)
+                return;
+
+            _overlayWindow.RefreshInstanceList(_instances);
+        }
+
+        private GameInstance? GetSelectedInstance()
+        {
+            if (AccountsListBox.SelectedItem is GameInstance selected)
+                return selected;
+
+            return null;
+        }
+
+        // ── Tray ─────────────────────────────────────────────────────────────
+
+        private void SetupTrayIcon()
+        {
+            _notifyIcon = new Forms.NotifyIcon();
+            try
+            {
+                var exePath = Environment.ProcessPath
+                    ?? Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(exePath))
+                    _notifyIcon.Icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
+            }
+            catch { }
+
+            _notifyIcon.Text    = "DofusTabs (en ejecución)";
+            _notifyIcon.Visible = true;
+            _notifyIcon.DoubleClick += (_, _) => RestoreFromTray();
+
+            var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add("Mostrar", null, (_, _) => RestoreFromTray());
+            menu.Items.Add("Salir",   null, (_, _) => ExitFromTray());
+            _notifyIcon.ContextMenuStrip = menu;
         }
 
         private void RestoreFromTray()
@@ -248,6 +562,22 @@ namespace DofusTabs.UI
             Close();
         }
 
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            if (WindowState == WindowState.Minimized && !_isExiting)
+            {
+                Hide();
+                ShowInTaskbar = false;
+                if (_notifyIcon != null) _notifyIcon.Visible = true;
+            }
+            else if (WindowState == WindowState.Normal)
+            {
+                ShowInTaskbar = true;
+            }
+        }
+
+        // ── Cierre ───────────────────────────────────────────────────────────
+
         protected override void OnClosing(CancelEventArgs e)
         {
             if (!_exitConfirmed)
@@ -255,11 +585,9 @@ namespace DofusTabs.UI
                 if (HasRunningDofusClients())
                 {
                     var result = MessageBox.Show(
-                        "Al cerrar DofusMaster se cerrarán todas las cuentas de Dofus abiertas.\n\n¿Deseas continuar?",
+                        "Al cerrar DofusTabs se cerrarán todas las cuentas de Dofus abiertas.\n\n¿Deseas continuar?",
                         "Confirmar salida",
-                        MessageBoxButton.YesNo,
-                        MessageBoxImage.Warning,
-                        MessageBoxResult.No);
+                        MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
 
                     if (result != MessageBoxResult.Yes)
                     {
@@ -268,13 +596,23 @@ namespace DofusTabs.UI
                         return;
                     }
                 }
-
                 _exitConfirmed = true;
-                _isExiting = true;
+                _isExiting     = true;
             }
 
-            _windowEmbeddingService.RestoreEmbeddedWindow();
+            SaveCurrentSettings();
+
+            if (_settingsWindow != null)
+            {
+                _settingsWindow.Close();
+                _settingsWindow = null;
+            }
+
+            _embedding.RestoreAll();
             CloseAllDofusClients();
+
+            _watcher.Stop();
+            _hotkeys.Dispose();
 
             if (_notifyIcon != null)
             {
@@ -285,97 +623,89 @@ namespace DofusTabs.UI
             base.OnClosing(e);
         }
 
-        protected override void OnClosed(EventArgs e)
+        private void SaveCurrentSettings()
         {
-            _windowEmbeddingService.Dispose();
-            base.OnClosed(e);
+            PersistInteractiveState("shutdown");
         }
 
-        private void CloseAllDofusClients()
+        private void PersistInteractiveState(string source)
         {
-            List<uint> processIds;
-
             try
             {
-                processIds = _windowManager
-                    .GetDofusWindows()
-                    .Select(w => w.ProcessId)
-                    .Distinct()
-                    .ToList();
-            }
-            catch
-            {
-                return;
-            }
+                var saved = _settings.Load();
+                saved.Instances.Clear();
+                foreach (var inst in _instances)
+                {
+                    saved.Instances.Add(new InstanceSettings
+                    {
+                        ProcessId       = inst.ProcessId,
+                        Title           = inst.WindowTitle,
+                        IsEnabled       = inst.IsEnabled,
+                        DisplayOrder    = inst.DisplayOrder,
+                        IndividualHotkey = inst.IndividualHotkey,
+                    });
+                }
 
-            if (!processIds.Any())
-            {
-                return;
-            }
+                if (_overlayWindow != null)
+                {
+                    saved.OverlayVisible = _overlayWindow.IsVisible;
+                    saved.OverlayCompact = _overlayWindow.IsCompact;
+                    saved.OverlayX = _overlayWindow.Left;
+                    saved.OverlayY = _overlayWindow.Top;
+                }
 
-            foreach (var pid in processIds)
-            {
-                TryCloseProcessGracefully(pid);
+                _settings.Save(saved);
+                AppLogger.Info($"Settings persistidos ({source})");
             }
-
-            foreach (var pid in processIds)
+            catch (Exception ex)
             {
-                TryForceKillProcess(pid);
+                AppLogger.Error(ex, $"Error guardando settings ({source})");
             }
         }
 
         private bool HasRunningDofusClients()
         {
-            try
-            {
-                return _windowManager.GetDofusWindows().Any();
-            }
-            catch
-            {
-                return false;
-            }
+            try { return _discovery.GetSnapshot(preserveState: false).Any(); }
+            catch { return false; }
         }
 
-        private static void TryCloseProcessGracefully(uint processId)
+        private void CloseAllDofusClients()
+        {
+            List<uint> pids;
+            try
+            {
+                pids = _discovery.GetSnapshot(preserveState: false)
+                    .Select(i => i.ProcessId).Distinct().ToList();
+            }
+            catch { return; }
+
+            foreach (var pid in pids) TryCloseGracefully(pid);
+            foreach (var pid in pids) TryForceKill(pid);
+        }
+
+        private static void TryCloseGracefully(uint pid)
         {
             try
             {
-                var process = Process.GetProcessById((int)processId);
-                if (process.HasExited)
-                {
-                    return;
-                }
-
-                // Intento de cierre normal para evitar corrupción de estado del cliente.
-                if (process.CloseMainWindow())
-                {
-                    process.WaitForExit(1200);
-                }
+                var p = Process.GetProcessById((int)pid);
+                if (!p.HasExited && p.CloseMainWindow())
+                    p.WaitForExit(1200);
             }
-            catch
-            {
-                // Ignorar; se intentará cierre forzado después.
-            }
+            catch { }
         }
 
-        private static void TryForceKillProcess(uint processId)
+        private static void TryForceKill(uint pid)
         {
             try
             {
-                var process = Process.GetProcessById((int)processId);
-                if (process.HasExited)
+                var p = Process.GetProcessById((int)pid);
+                if (!p.HasExited)
                 {
-                    return;
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(1200);
                 }
-
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(1200);
             }
-            catch
-            {
-                // Ignorar para no bloquear el cierre de la app.
-            }
+            catch { }
         }
     }
 }
-

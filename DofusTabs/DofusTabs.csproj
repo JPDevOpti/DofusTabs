@@ -12,13 +12,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Core\" />
+    <Folder Include="Domain\" />
+    <Folder Include="Application\Services\" />
+    <Folder Include="Application\Settings\" />
+    <Folder Include="Infrastructure\Win32\" />
+    <Folder Include="Infrastructure\Discovery\" />
+    <Folder Include="Infrastructure\Embedding\" />
+    <Folder Include="Infrastructure\Hotkeys\" />
+    <Folder Include="Infrastructure\ProcessWatcher\" />
+    <Folder Include="Infrastructure\Settings\" />
+    <Folder Include="Diagnostics\" />
     <Folder Include="UI\" />
-    <Folder Include="Utils\" />
     <Folder Include="Resources\" />
   </ItemGroup>
 
