@@ -5,11 +5,13 @@ using System.Diagnostics;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using DofusTabs.Application.Services;
 using DofusTabs.Application.Settings;
 using DofusTabs.Diagnostics;
 using DofusTabs.Domain;
 using DofusTabs.Infrastructure.Discovery;
+using DofusTabs.Infrastructure.Win32;
 using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 
@@ -27,7 +29,6 @@ namespace DofusTabs.UI
         private List<GameInstance> _instances = new();
         private uint? _activeProcessId;
         private Forms.NotifyIcon? _notifyIcon;
-        private OverlayWindow? _overlayWindow;
         private SettingsWindow? _settingsWindow;
         private bool _isExiting;
         private bool _exitConfirmed;
@@ -73,6 +74,8 @@ namespace DofusTabs.UI
             GameHostPanel.Resize += (_, _) => _embedding.Resize(
                 Math.Max(1, GameHostPanel.ClientSize.Width),
                 Math.Max(1, GameHostPanel.ClientSize.Height));
+            GameHost.GotKeyboardFocus += (_, _) => FocusCurrentEmbeddedWindow();
+            GameHostPanel.Enter += (_, _) => FocusCurrentEmbeddedWindow();
 
             _watcher.ProcessAppeared    += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
             _watcher.ProcessDisappeared += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
@@ -83,7 +86,6 @@ namespace DofusTabs.UI
             _discoveryImpl.ApplyPersistedSettings(savedSettings.Instances);
             ApplyPerInstanceHotkeys(savedSettings.Instances);
             Refresh(selectFallback: !_activeProcessId.HasValue);
-            InitializeOverlay(savedSettings);
             UpdateSettingsWindowState();
 
             AppLogger.Info("MainWindow cargada");
@@ -138,7 +140,6 @@ namespace DofusTabs.UI
 
             UpdateActiveFlags();
             UpdateSidebar();
-            SyncOverlayInstances();
 
             if (!_instances.Any())
             {
@@ -200,6 +201,7 @@ namespace DofusTabs.UI
             UpdateActiveFlags();
             UpdateSidebar();
             EmptyHostText.Visibility = Visibility.Collapsed;
+            TryFocusEmbeddedWindow(gameHandle);
             AppLogger.Info($"Cuenta activa: {instance.CharacterName} (pid={instance.ProcessId})");
         }
 
@@ -231,7 +233,6 @@ namespace DofusTabs.UI
 
             UpdateActiveFlags();
             UpdateSidebar();
-            SyncOverlayInstances();
 
             if (!_activeProcessId.HasValue)
             {
@@ -287,42 +288,7 @@ namespace DofusTabs.UI
             _instances = ordered;
             UpdateSidebar();
             AccountsListBox.SelectedItem = _instances.FirstOrDefault(i => i.ProcessId == selected.ProcessId);
-            SyncOverlayInstances();
             PersistInteractiveState(delta < 0 ? "move up" : "move down");
-            UpdateSettingsWindowState();
-        }
-
-        private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e) =>
-            ToggleOverlayVisibility();
-
-        private void ToggleOverlayVisibility()
-        {
-            EnsureOverlayWindow();
-            if (_overlayWindow == null)
-                return;
-
-            if (_overlayWindow.IsVisible)
-            {
-                _overlayWindow.Hide();
-            }
-            else
-            {
-                SyncOverlayInstances();
-                _overlayWindow.Show();
-            }
-
-            PersistInteractiveState("toggle overlay");
-            UpdateSettingsWindowState();
-        }
-
-        private void ToggleOverlayCompactMode()
-        {
-            EnsureOverlayWindow();
-            if (_overlayWindow == null)
-                return;
-
-            _overlayWindow.SetCompactMode(!_overlayWindow.IsCompact);
-            PersistInteractiveState("toggle overlay compact");
             UpdateSettingsWindowState();
         }
 
@@ -396,8 +362,6 @@ namespace DofusTabs.UI
 
         private void OpenSettingsWindow()
         {
-            EnsureOverlayWindow();
-
             if (_settingsWindow != null)
             {
                 UpdateSettingsWindowState();
@@ -409,9 +373,7 @@ namespace DofusTabs.UI
             _settingsWindow = new SettingsWindow(
                 onToggleEnable: ToggleSelectedAccountEnabled,
                 onMoveUp: () => MoveSelectedAccount(-1),
-                onMoveDown: () => MoveSelectedAccount(1),
-                onToggleOverlay: ToggleOverlayVisibility,
-                onToggleOverlayCompact: ToggleOverlayCompactMode)
+                onMoveDown: () => MoveSelectedAccount(1))
             {
                 Owner = this
             };
@@ -452,8 +414,6 @@ namespace DofusTabs.UI
                 SelectedAccountEnabled = selected?.IsEnabled ?? false,
                 CanMoveUp = hasSelected && selectedIndex > 0,
                 CanMoveDown = hasSelected && selectedIndex >= 0 && selectedIndex < ordered.Count - 1,
-                OverlayVisible = _overlayWindow?.IsVisible == true,
-                OverlayCompact = _overlayWindow?.IsCompact == true,
             };
         }
 
@@ -465,55 +425,46 @@ namespace DofusTabs.UI
             _settingsWindow.UpdateState(BuildSettingsViewState());
         }
 
-        private void InitializeOverlay(AppSettings savedSettings)
+        private void FocusCurrentEmbeddedWindow()
         {
-            EnsureOverlayWindow();
-            if (_overlayWindow == null)
+            if (!_activeProcessId.HasValue)
                 return;
 
-            _overlayWindow.SetCompactMode(savedSettings.OverlayCompact);
-
-            if (savedSettings.OverlayX >= 0 && savedSettings.OverlayY >= 0)
-            {
-                _overlayWindow.SetPosition(savedSettings.OverlayX, savedSettings.OverlayY);
-            }
-            else
-            {
-                _overlayWindow.SetPosition(Left + Width + 12, Top + 20);
-            }
-
-            SyncOverlayInstances();
-
-            if (savedSettings.OverlayVisible)
-                _overlayWindow.Show();
+            if (_discovery.TryGetWindowHandle(_activeProcessId.Value, out var gameHandle))
+                TryFocusEmbeddedWindow(gameHandle);
         }
 
-        private void EnsureOverlayWindow()
+        private void TryFocusEmbeddedWindow(IntPtr gameHandle)
         {
-            if (_overlayWindow != null)
+            if (gameHandle == IntPtr.Zero)
                 return;
 
-            _overlayWindow = new OverlayWindow(_discovery)
-            {
-                Owner = this
-            };
-
-            _overlayWindow.OnOverlayHidden += () => PersistInteractiveState("overlay hidden");
-            _overlayWindow.OnCompactChanged += _ => PersistInteractiveState("overlay compact");
-            _overlayWindow.LocationChanged += (_, _) =>
-            {
-                if (_overlayWindow.IsVisible)
-                    PersistInteractiveState("overlay moved");
-            };
-            _overlayWindow.Closed += (_, _) => _overlayWindow = null;
-        }
-
-        private void SyncOverlayInstances()
-        {
-            if (_overlayWindow == null)
+            IntPtr mainHandle = new WindowInteropHelper(this).Handle;
+            if (mainHandle == IntPtr.Zero)
                 return;
 
-            _overlayWindow.RefreshInstanceList(_instances);
+            uint uiThreadId = User32.GetCurrentThreadId();
+            uint gameThreadId = User32.GetWindowThreadProcessId(gameHandle, out _);
+            if (gameThreadId == 0)
+                return;
+
+            bool attached = false;
+            try
+            {
+                if (gameThreadId != uiThreadId)
+                    attached = User32.AttachThreadInput(uiThreadId, gameThreadId, true);
+
+                // Transferir el foco de teclado al cliente embebido para no perder input.
+                User32.SetForegroundWindow(mainHandle);
+                GameHost.Focus();
+                GameHostPanel.Focus();
+                User32.SetFocus(gameHandle);
+            }
+            finally
+            {
+                if (attached)
+                    User32.AttachThreadInput(uiThreadId, gameThreadId, false);
+            }
         }
 
         private GameInstance? GetSelectedInstance()
@@ -554,6 +505,7 @@ namespace DofusTabs.UI
             ShowInTaskbar = true;
             WindowState = WindowState.Normal;
             Activate();
+            FocusCurrentEmbeddedWindow();
         }
 
         private void ExitFromTray()
@@ -644,14 +596,6 @@ namespace DofusTabs.UI
                         DisplayOrder    = inst.DisplayOrder,
                         IndividualHotkey = inst.IndividualHotkey,
                     });
-                }
-
-                if (_overlayWindow != null)
-                {
-                    saved.OverlayVisible = _overlayWindow.IsVisible;
-                    saved.OverlayCompact = _overlayWindow.IsCompact;
-                    saved.OverlayX = _overlayWindow.Left;
-                    saved.OverlayY = _overlayWindow.Top;
                 }
 
                 _settings.Save(saved);

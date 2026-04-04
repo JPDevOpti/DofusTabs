@@ -42,10 +42,6 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = v1.NextHotkeyKey,
                 PreviousHotkeyModifiers = v1.PreviousHotkeyModifiers,
                 PreviousHotkeyKey       = v1.PreviousHotkeyKey,
-                OverlayX       = v1.OverlayX,
-                OverlayY       = v1.OverlayY,
-                OverlayVisible = v1.OverlayVisible,
-                OverlayCompact = v1.OverlayCompact,
             };
 
             // Migrar Windows → Instances

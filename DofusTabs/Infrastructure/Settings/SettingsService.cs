@@ -67,12 +67,12 @@ namespace DofusTabs.Infrastructure.Settings
         {
             return new AppSettings
             {
-                NextHotkey     = ParseBinding(v2.NextHotkeyModifiers, v2.NextHotkeyKey),
-                PreviousHotkey = ParseBinding(v2.PreviousHotkeyModifiers, v2.PreviousHotkeyKey),
-                OverlayX       = v2.OverlayX,
-                OverlayY       = v2.OverlayY,
-                OverlayVisible = v2.OverlayVisible,
-                OverlayCompact = v2.OverlayCompact,
+                NextHotkey     = SanitizeGlobalBinding(
+                    ParseBinding(v2.NextHotkeyModifiers, v2.NextHotkeyKey),
+                    new HotkeyBinding(ModifierKeys.Alt, Key.Tab)),
+                PreviousHotkey = SanitizeGlobalBinding(
+                    ParseBinding(v2.PreviousHotkeyModifiers, v2.PreviousHotkeyKey),
+                    new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab)),
                 Instances      = MapInstances(v2.Instances),
             };
         }
@@ -82,15 +82,21 @@ namespace DofusTabs.Infrastructure.Settings
             var result = new List<InstanceSettings>(raw.Count);
             foreach (var r in raw)
             {
+                HotkeyBinding? individual = null;
+                if (!string.IsNullOrWhiteSpace(r.HotkeyKey))
+                {
+                    var parsed = ParseBinding(r.HotkeyModifiers, r.HotkeyKey);
+                    if (!parsed.IsEmpty && HasSupportedModifier(parsed.Modifiers))
+                        individual = parsed;
+                }
+
                 result.Add(new InstanceSettings
                 {
                     ProcessId       = r.ProcessId,
                     Title           = r.Title,
                     IsEnabled       = r.IsEnabled,
                     DisplayOrder    = r.DisplayOrder,
-                    IndividualHotkey = string.IsNullOrWhiteSpace(r.HotkeyKey)
-                        ? null
-                        : ParseBinding(r.HotkeyModifiers, r.HotkeyKey),
+                    IndividualHotkey = individual,
                 });
             }
             return result;
@@ -104,10 +110,6 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = s.NextHotkey.Key.ToString(),
                 PreviousHotkeyModifiers = ModifiersToString(s.PreviousHotkey.Modifiers),
                 PreviousHotkeyKey       = s.PreviousHotkey.Key.ToString(),
-                OverlayX       = s.OverlayX,
-                OverlayY       = s.OverlayY,
-                OverlayVisible = s.OverlayVisible,
-                OverlayCompact = s.OverlayCompact,
             };
 
             foreach (var inst in s.Instances)
@@ -120,7 +122,9 @@ namespace DofusTabs.Infrastructure.Settings
                     DisplayOrder = inst.DisplayOrder,
                     HotkeyModifiers = inst.IndividualHotkey != null
                         ? ModifiersToString(inst.IndividualHotkey.Modifiers) : string.Empty,
-                    HotkeyKey = inst.IndividualHotkey?.Key.ToString() ?? string.Empty,
+                    HotkeyKey = inst.IndividualHotkey != null && HasSupportedModifier(inst.IndividualHotkey.Modifiers)
+                        ? inst.IndividualHotkey.Key.ToString()
+                        : string.Empty,
                 });
             }
 
@@ -152,5 +156,15 @@ namespace DofusTabs.Infrastructure.Settings
             if ((modifiers & ModifierKeys.Shift)   != 0) parts.Add("Shift");
             return string.Join(",", parts);
         }
+
+        private static HotkeyBinding SanitizeGlobalBinding(HotkeyBinding binding, HotkeyBinding fallback)
+        {
+            if (binding.IsEmpty || !HasSupportedModifier(binding.Modifiers))
+                return fallback;
+            return binding;
+        }
+
+        private static bool HasSupportedModifier(ModifierKeys modifiers) =>
+            (modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0;
     }
 }

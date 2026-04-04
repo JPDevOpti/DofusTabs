@@ -77,38 +77,16 @@
         </Border>
 
         <Grid Grid.Row="2" Margin="0,0,0,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <Border Grid.Column="0"
-                    Background="#1B1E1E"
+            <Border Background="#1B1E1E"
                     BorderBrush="#353B3B"
                     BorderThickness="1"
                     CornerRadius="6"
-                    Padding="10"
-                    Margin="0,0,6,0">
+                    Padding="10">
                 <StackPanel>
                     <TextBlock Text="Cuenta" FontWeight="SemiBold" Margin="0,0,0,10"/>
                     <Button x:Name="ToggleEnableButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleEnableButton_Click" Content="Habilitar cuenta"/>
                     <Button x:Name="MoveUpButton" Style="{StaticResource SettingsActionButtonStyle}" Click="MoveUpButton_Click" Content="Subir en orden"/>
                     <Button x:Name="MoveDownButton" Style="{StaticResource SettingsActionButtonStyle}" Click="MoveDownButton_Click" Margin="0,0,0,0" Content="Bajar en orden"/>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Column="1"
-                    Background="#1B1E1E"
-                    BorderBrush="#353B3B"
-                    BorderThickness="1"
-                    CornerRadius="6"
-                    Padding="10"
-                    Margin="6,0,0,0">
-                <StackPanel>
-                    <TextBlock Text="Overlay" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                    <Button x:Name="ToggleOverlayButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleOverlayButton_Click" Content="Mostrar overlay"/>
-                    <Button x:Name="ToggleOverlayCompactButton" Style="{StaticResource SettingsActionButtonStyle}" Click="ToggleOverlayCompactButton_Click" Content="Modo compacto"/>
-                    <TextBlock x:Name="OverlayStateText" Text="Overlay oculto" Foreground="#B9C1C1" FontSize="12" Margin="0,2,0,0"/>
                 </StackPanel>
             </Border>
         </Grid>

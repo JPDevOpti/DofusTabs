@@ -10,10 +10,6 @@ namespace DofusTabs.Infrastructure.Settings
         public string PreviousHotkeyModifiers { get; set; } = "Alt,Shift";
         public string PreviousHotkeyKey       { get; set; } = "Tab";
         public List<WindowSettingsV1> Windows { get; set; } = new();
-        public double OverlayX       { get; set; } = -1;
-        public double OverlayY       { get; set; } = -1;
-        public bool   OverlayVisible { get; set; } = false;
-        public bool   OverlayCompact { get; set; } = false;
     }
 
     internal sealed class WindowSettingsV1

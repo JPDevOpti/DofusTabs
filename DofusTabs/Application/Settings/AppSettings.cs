@@ -13,11 +13,6 @@ namespace DofusTabs.Application.Settings
             new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
 
         public List<InstanceSettings> Instances { get; set; } = new List<InstanceSettings>();
-
-        public double OverlayX { get; set; } = -1;
-        public double OverlayY { get; set; } = -1;
-        public bool OverlayVisible { get; set; } = false;
-        public bool OverlayCompact { get; set; } = false;
     }
 
     public sealed class InstanceSettings

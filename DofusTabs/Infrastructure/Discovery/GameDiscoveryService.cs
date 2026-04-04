@@ -17,6 +17,13 @@ namespace DofusTabs.Infrastructure.Discovery
         public IReadOnlyList<GameInstance> GetSnapshot(bool preserveState = true)
         {
             var rawWindows = WindowEnumerator.EnumerateGameWindows(EmbeddingRegistry.KnownProcessNames);
+            var bestWindows = rawWindows
+                .GroupBy(w => w.ProcessId)
+                .Select(g => g
+                    .OrderByDescending(w => ScoreTitle(w.Title))
+                    .ThenByDescending(w => w.Title.Length)
+                    .First())
+                .ToList();
 
             // Calcular DisplayOrder máximo del ciclo anterior para nuevas instancias
             int nextOrder = _previousInstances.Any()
@@ -26,12 +33,8 @@ namespace DofusTabs.Infrastructure.Discovery
             var newInstances = new Dictionary<uint, GameInstance>();
             var newHandleMap = new Dictionary<uint, IntPtr>();
 
-            foreach (var raw in rawWindows)
+            foreach (var raw in bestWindows)
             {
-                // Si ya tenemos este processId en este ciclo, ignorar (múltiples ventanas del mismo proceso)
-                if (newInstances.ContainsKey(raw.ProcessId))
-                    continue;
-
                 GameInstance instance;
                 if (preserveState && _previousInstances.TryGetValue(raw.ProcessId, out var existing))
                 {
@@ -81,5 +84,26 @@ namespace DofusTabs.Infrastructure.Discovery
                 }
             }
         }
+
+        private static int ScoreTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return int.MinValue;
+
+            string trimmed = title.Trim();
+            if (IsNoiseTitle(trimmed))
+                return int.MinValue + 100;
+
+            int score = Math.Min(trimmed.Length, 120);
+            if (trimmed.Contains(" - ", StringComparison.Ordinal)) score += 180;
+            if (trimmed.Contains("|", StringComparison.Ordinal)) score += 60;
+            if (trimmed.Contains("dofus", StringComparison.OrdinalIgnoreCase)) score += 20;
+            return score;
+        }
+
+        private static bool IsNoiseTitle(string title) =>
+            title.Equals("MSCTFIME UI", StringComparison.OrdinalIgnoreCase)
+            || title.Equals("Default IME", StringComparison.OrdinalIgnoreCase)
+            || title.Equals("Release", StringComparison.OrdinalIgnoreCase);
     }
 }

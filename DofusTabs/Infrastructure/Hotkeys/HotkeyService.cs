@@ -34,14 +34,22 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         public void Initialize(Window window)
         {
-            window.Loaded += (_, _) =>
+            void AttachHooks()
             {
+                if (_hwnd != IntPtr.Zero)
+                    return;
+
                 _hwnd = new WindowInteropHelper(window).Handle;
                 _hwndSource = HwndSource.FromHwnd(_hwnd);
                 _hwndSource?.AddHook(HwndHook);
                 ReRegisterAll();
                 AppLogger.Info("HotkeyService inicializado");
-            };
+            }
+
+            if (window.IsLoaded)
+                AttachHooks();
+            else
+                window.Loaded += (_, _) => AttachHooks();
 
             window.Closed += (_, _) =>
             {
@@ -53,7 +61,12 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         public bool Register(int id, HotkeyBinding binding)
         {
-            if (binding.IsEmpty) return false;
+            if (!IsValidGlobalBinding(binding))
+            {
+                AppLogger.Warn($"HotkeyService: hotkey global inválido id={id} ({binding}). Se requiere al menos un modificador (Ctrl/Alt/Shift).");
+                Unregister(id);
+                return false;
+            }
 
             if (_hwnd != IntPtr.Zero)
                 User32.UnregisterHotKey(_hwnd, id);
@@ -79,10 +92,16 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         public bool RegisterForInstance(uint processId, HotkeyBinding binding)
         {
-            if (binding.IsEmpty || _hwnd == IntPtr.Zero) return false;
-
             // Quitar hotkey previo de esta instancia
             UnregisterForInstance(processId);
+
+            if (!IsValidInstanceBinding(binding))
+            {
+                AppLogger.Warn($"HotkeyService: hotkey de instancia inválido pid={processId} ({binding}). Se requiere al menos un modificador (Ctrl/Alt/Shift).");
+                return false;
+            }
+
+            if (_hwnd == IntPtr.Zero) return false;
 
             // Quitar si la misma combinación estaba asignada a otra instancia
             var conflict = _instanceHotkeys
@@ -192,5 +211,14 @@ namespace DofusTabs.Infrastructure.Hotkeys
             if ((modifiers & ModifierKeys.Shift)   != 0) val |= User32.MOD_SHIFT;
             return val;
         }
+
+        private static bool IsValidGlobalBinding(HotkeyBinding binding) =>
+            !binding.IsEmpty && HasSupportedModifier(binding.Modifiers);
+
+        private static bool IsValidInstanceBinding(HotkeyBinding binding) =>
+            !binding.IsEmpty && HasSupportedModifier(binding.Modifiers);
+
+        private static bool HasSupportedModifier(ModifierKeys modifiers) =>
+            (modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0;
     }
 }
