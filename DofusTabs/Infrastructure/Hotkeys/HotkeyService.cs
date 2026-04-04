@@ -15,10 +15,12 @@ namespace DofusTabs.Infrastructure.Hotkeys
     {
         public int NextHotkeyId     => 1;
         public int PreviousHotkeyId => 2;
+        public int PrimaryHotkeyId  => 3;
         private const int InstanceHotkeyBase = 100;
 
         public event Action? NextRequested;
         public event Action? PreviousRequested;
+        public event Action? PrimaryRequested;
         public event Action<uint>? InstanceActivationRequested;
 
         private IntPtr _hwnd;
@@ -177,6 +179,11 @@ namespace DofusTabs.Infrastructure.Hotkeys
             else if (id == PreviousHotkeyId)
             {
                 PreviousRequested?.Invoke();
+                handled = true;
+            }
+            else if (id == PrimaryHotkeyId)
+            {
+                PrimaryRequested?.Invoke();
                 handled = true;
             }
             else

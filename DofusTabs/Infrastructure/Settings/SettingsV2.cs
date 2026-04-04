@@ -10,6 +10,9 @@ namespace DofusTabs.Infrastructure.Settings
         public string NextHotkeyKey           { get; set; } = "Tab";
         public string PreviousHotkeyModifiers { get; set; } = "Alt,Shift";
         public string PreviousHotkeyKey       { get; set; } = "Tab";
+        public string PrimaryHotkeyModifiers  { get; set; } = "Alt";
+        public string PrimaryHotkeyKey        { get; set; } = "Home";
+        public string PrimaryCharacterName    { get; set; } = string.Empty;
         public bool ShowSidebarNames          { get; set; } = false;
 
         public List<InstanceSettingsV2> Instances { get; set; } = new();

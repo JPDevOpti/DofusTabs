@@ -38,6 +38,9 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = v1.NextHotkeyKey,
                 PreviousHotkeyModifiers = v1.PreviousHotkeyModifiers,
                 PreviousHotkeyKey       = v1.PreviousHotkeyKey,
+                PrimaryHotkeyModifiers  = "Alt",
+                PrimaryHotkeyKey        = "Home",
+                PrimaryCharacterName    = string.Empty,
                 ShowSidebarNames        = false,
             };
 

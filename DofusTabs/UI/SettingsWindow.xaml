@@ -124,6 +124,18 @@
                             Style="{StaticResource HotkeyCaptureButtonStyle}"
                             Click="PrevHotkeyButton_Click"/>
                 </Grid>
+
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Ir al personaje principal" FontSize="12" VerticalAlignment="Center"/>
+                    <Button x:Name="PrimaryHotkeyButton"
+                            Grid.Column="1"
+                            Style="{StaticResource HotkeyCaptureButtonStyle}"
+                            Click="PrimaryHotkeyButton_Click"/>
+                </Grid>
             </StackPanel>
         </Border>
 

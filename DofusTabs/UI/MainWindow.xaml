@@ -53,6 +53,38 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="SidebarListBoxItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,1,0,1"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Opacity" Value="0"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value>
+                    <TransformGroup>
+                        <ScaleTransform ScaleX="1" ScaleY="1"/>
+                        <TranslateTransform X="0" Y="4"/>
+                    </TransformGroup>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <EventTrigger RoutedEvent="Loaded">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                             To="1"
+                                             Duration="0:0:0.16"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[1].(TranslateTransform.Y)"
+                                             To="0"
+                                             Duration="0:0:0.18"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -76,16 +108,16 @@
                              BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              HorizontalContentAlignment="Center"
+                             AllowDrop="True"
+                             PreviewMouseLeftButtonDown="AccountsListBox_PreviewMouseLeftButtonDown"
+                             PreviewMouseMove="AccountsListBox_PreviewMouseMove"
+                             DragOver="AccountsListBox_DragOver"
+                             DragLeave="AccountsListBox_DragLeave"
+                             Drop="AccountsListBox_Drop"
                              SelectionMode="Single"
                              SelectionChanged="AccountsListBox_SelectionChanged">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="Margin" Value="0,1,0,1"/>
-                                <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="BorderThickness" Value="0"/>
-                                <Setter Property="Focusable" Value="False"/>
-                            </Style>
+                            <StaticResource ResourceKey="SidebarListBoxItemStyle"/>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
@@ -104,6 +136,7 @@
                                             <Button.ContextMenu>
                                                 <ContextMenu Opened="AccountContextMenu_Opened">
                                                     <MenuItem Click="ToggleAccountEnabledFromSidebar_Click"/>
+                                                    <MenuItem Click="SetPrimaryFromSidebar_Click"/>
                                                 </ContextMenu>
                                             </Button.ContextMenu>
                                             <Grid Width="34" Height="34" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -126,6 +159,24 @@
                                                             <Setter Property="Visibility" Value="Collapsed"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IconPath}" Value="">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="★"
+                                                           FontSize="10"
+                                                           FontWeight="Bold"
+                                                           Foreground="#F3C94A"
+                                                           HorizontalAlignment="Left"
+                                                           VerticalAlignment="Bottom"
+                                                           Margin="-6,0,0,-1">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsPrimary}" Value="True">
                                                                     <Setter Property="Visibility" Value="Visible"/>
                                                                 </DataTrigger>
                                                             </Style.Triggers>

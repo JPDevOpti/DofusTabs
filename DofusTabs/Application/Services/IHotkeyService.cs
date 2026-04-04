@@ -19,9 +19,11 @@ namespace DofusTabs.Application.Services
 
         int NextHotkeyId { get; }
         int PreviousHotkeyId { get; }
+        int PrimaryHotkeyId { get; }
 
         event Action? NextRequested;
         event Action? PreviousRequested;
+        event Action? PrimaryRequested;
         event Action<uint>? InstanceActivationRequested;
     }
 }

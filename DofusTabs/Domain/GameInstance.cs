@@ -13,6 +13,7 @@ namespace DofusTabs.Domain
 
         private bool _isEnabled = true;
         private bool _isActive;
+        private bool _isPrimary;
         private int _displayOrder;
         private HotkeyBinding? _individualHotkey;
 
@@ -66,6 +67,12 @@ namespace DofusTabs.Domain
         {
             get => _isActive;
             set { if (_isActive != value) { _isActive = value; OnPropertyChanged(nameof(IsActive)); } }
+        }
+
+        public bool IsPrimary
+        {
+            get => _isPrimary;
+            set { if (_isPrimary != value) { _isPrimary = value; OnPropertyChanged(nameof(IsPrimary)); } }
         }
 
         private GameInstance(uint processId, string windowTitle, string processName,

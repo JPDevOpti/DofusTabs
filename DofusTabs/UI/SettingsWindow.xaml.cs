@@ -10,19 +10,21 @@ namespace DofusTabs.UI
     {
         public HotkeyBinding NextHotkey { get; init; } = new(ModifierKeys.Alt, Key.Tab);
         public HotkeyBinding PreviousHotkey { get; init; } = new(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
+        public HotkeyBinding PrimaryHotkey { get; init; } = new(ModifierKeys.Alt, Key.Home);
         public bool ShowSidebarNames { get; init; }
     }
 
     public partial class SettingsWindow : Window
     {
-        private readonly Action<HotkeyBinding, HotkeyBinding> _onHotkeysChanged;
+        private readonly Action<HotkeyBinding, HotkeyBinding, HotkeyBinding> _onHotkeysChanged;
         private readonly Action<bool> _onCaptureModeChanged;
         private readonly Action<bool> _onShowSidebarNamesChanged;
 
         private HotkeyBinding _currentNext;
         private HotkeyBinding _currentPrev;
+        private HotkeyBinding _currentPrimary;
 
-        private enum CaptureTarget { None, Next, Previous }
+        private enum CaptureTarget { None, Next, Previous, Primary }
         private CaptureTarget _capturing = CaptureTarget.None;
         private bool _updatingFromState;
 
@@ -32,7 +34,7 @@ namespace DofusTabs.UI
         private static readonly SolidColorBrush _normalBorder        = new(Color.FromRgb(0x3E, 0x45, 0x45));
 
         public SettingsWindow(
-            Action<HotkeyBinding, HotkeyBinding> onHotkeysChanged,
+            Action<HotkeyBinding, HotkeyBinding, HotkeyBinding> onHotkeysChanged,
             Action<bool> onCaptureModeChanged,
             Action<bool> onShowSidebarNamesChanged)
         {
@@ -42,6 +44,7 @@ namespace DofusTabs.UI
 
             _currentNext = new HotkeyBinding(ModifierKeys.Alt, Key.Tab);
             _currentPrev = new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
+            _currentPrimary = new HotkeyBinding(ModifierKeys.Alt, Key.Home);
 
             InitializeComponent();
         }
@@ -56,8 +59,10 @@ namespace DofusTabs.UI
             {
                 _currentNext = state.NextHotkey;
                 _currentPrev = state.PreviousHotkey;
+                _currentPrimary = state.PrimaryHotkey;
                 NextHotkeyButton.Content = state.NextHotkey.ToString();
                 PrevHotkeyButton.Content = state.PreviousHotkey.ToString();
+                PrimaryHotkeyButton.Content = state.PrimaryHotkey.ToString();
             }
         }
 
@@ -98,12 +103,25 @@ namespace DofusTabs.UI
             StartCapture(CaptureTarget.Previous);
         }
 
+        private void PrimaryHotkeyButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_capturing == CaptureTarget.Primary) { CancelCapture(); return; }
+            if (_capturing != CaptureTarget.None) CancelCapture();
+            StartCapture(CaptureTarget.Primary);
+        }
+
         private void StartCapture(CaptureTarget target)
         {
             _capturing = target;
             _onCaptureModeChanged(true);
 
-            var btn = target == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
+            var btn = target switch
+            {
+                CaptureTarget.Next => NextHotkeyButton,
+                CaptureTarget.Previous => PrevHotkeyButton,
+                CaptureTarget.Primary => PrimaryHotkeyButton,
+                _ => NextHotkeyButton,
+            };
             btn.Content    = "Presiona combinación...";
             btn.Background = _captureBackground;
             btn.BorderBrush = _captureBorder;
@@ -112,8 +130,20 @@ namespace DofusTabs.UI
 
         private void CancelCapture()
         {
-            var btn = _capturing == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
-            btn.Content     = (_capturing == CaptureTarget.Next ? _currentNext : _currentPrev).ToString();
+            var btn = _capturing switch
+            {
+                CaptureTarget.Next => NextHotkeyButton,
+                CaptureTarget.Previous => PrevHotkeyButton,
+                CaptureTarget.Primary => PrimaryHotkeyButton,
+                _ => NextHotkeyButton,
+            };
+            btn.Content = _capturing switch
+            {
+                CaptureTarget.Next => _currentNext.ToString(),
+                CaptureTarget.Previous => _currentPrev.ToString(),
+                CaptureTarget.Primary => _currentPrimary.ToString(),
+                _ => string.Empty,
+            };
             btn.Background  = _normalBackground;
             btn.BorderBrush = _normalBorder;
 
@@ -126,10 +156,18 @@ namespace DofusTabs.UI
         {
             if (_capturing == CaptureTarget.Next)
                 _currentNext = binding;
-            else
+            else if (_capturing == CaptureTarget.Previous)
                 _currentPrev = binding;
+            else
+                _currentPrimary = binding;
 
-            var btn = _capturing == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
+            var btn = _capturing switch
+            {
+                CaptureTarget.Next => NextHotkeyButton,
+                CaptureTarget.Previous => PrevHotkeyButton,
+                CaptureTarget.Primary => PrimaryHotkeyButton,
+                _ => NextHotkeyButton,
+            };
             btn.Content     = binding.ToString();
             btn.Background  = _normalBackground;
             btn.BorderBrush = _normalBorder;
@@ -137,7 +175,7 @@ namespace DofusTabs.UI
             // hint cleared(_capturing);
             _capturing = CaptureTarget.None;
             _onCaptureModeChanged(false);
-            _onHotkeysChanged(_currentNext, _currentPrev);
+            _onHotkeysChanged(_currentNext, _currentPrev, _currentPrimary);
         }
 
 

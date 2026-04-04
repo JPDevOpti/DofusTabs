@@ -73,6 +73,10 @@ namespace DofusTabs.Infrastructure.Settings
                 PreviousHotkey = SanitizeGlobalBinding(
                     ParseBinding(v2.PreviousHotkeyModifiers, v2.PreviousHotkeyKey),
                     new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab)),
+                PrimaryHotkey = SanitizeGlobalBinding(
+                    ParseBinding(v2.PrimaryHotkeyModifiers, v2.PrimaryHotkeyKey),
+                    new HotkeyBinding(ModifierKeys.Alt, Key.Home)),
+                PrimaryCharacterName = v2.PrimaryCharacterName ?? string.Empty,
                 ShowSidebarNames = v2.ShowSidebarNames,
                 Instances      = MapInstances(v2.Instances),
             };
@@ -111,6 +115,9 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = s.NextHotkey.Key.ToString(),
                 PreviousHotkeyModifiers = ModifiersToString(s.PreviousHotkey.Modifiers),
                 PreviousHotkeyKey       = s.PreviousHotkey.Key.ToString(),
+                PrimaryHotkeyModifiers  = ModifiersToString(s.PrimaryHotkey.Modifiers),
+                PrimaryHotkeyKey        = s.PrimaryHotkey.Key.ToString(),
+                PrimaryCharacterName    = s.PrimaryCharacterName,
                 ShowSidebarNames        = s.ShowSidebarNames,
             };
 

@@ -7,6 +7,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using DofusTabs.Application.Services;
 using DofusTabs.Application.Settings;
 using DofusTabs.Diagnostics;
@@ -32,11 +34,21 @@ namespace DofusTabs.UI
         private uint _attachedGameThreadId;
         private HotkeyBinding _nextHotkey     = new(ModifierKeys.Alt, Key.Tab);
         private HotkeyBinding _previousHotkey = new(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
+        private HotkeyBinding _primaryHotkey  = new(ModifierKeys.Alt, Key.Home);
+        private string _primaryCharacterName = string.Empty;
         private bool _showSidebarNames;
         private Forms.NotifyIcon? _notifyIcon;
         private SettingsWindow? _settingsWindow;
         private bool _isExiting;
-        private bool _exitConfirmed;
+        private Point _sidebarDragStart;
+        private GameInstance? _sidebarDragSource;
+        private bool _isSidebarDragging;
+        private ListBoxItem? _sidebarDragSourceItem;
+        private ListBoxItem? _sidebarDropTargetItem;
+        private bool _sidebarDropInsertAfter;
+        private IReadOnlyList<uint> _sidebarRenderedOrder = Array.Empty<uint>();
+
+        private static readonly SolidColorBrush SidebarDropTargetBrush = new(Color.FromArgb(70, 213, 193, 122));
 
         public MainWindow(
             IGameDiscoveryService discovery,
@@ -70,14 +82,18 @@ namespace DofusTabs.UI
 
             _nextHotkey     = savedSettings.NextHotkey;
             _previousHotkey = savedSettings.PreviousHotkey;
+            _primaryHotkey  = savedSettings.PrimaryHotkey;
+            _primaryCharacterName = savedSettings.PrimaryCharacterName ?? string.Empty;
             _showSidebarNames = savedSettings.ShowSidebarNames;
             ApplySidebarVisualOptions();
 
             _hotkeys.Register(_hotkeys.NextHotkeyId,     _nextHotkey);
             _hotkeys.Register(_hotkeys.PreviousHotkeyId, _previousHotkey);
+            _hotkeys.Register(_hotkeys.PrimaryHotkeyId,  _primaryHotkey);
 
             _hotkeys.NextRequested               += OnNextRequested;
             _hotkeys.PreviousRequested           += OnPreviousRequested;
+            _hotkeys.PrimaryRequested            += OnPrimaryRequested;
             _hotkeys.InstanceActivationRequested += OnInstanceActivationRequested;
 
             GameHostPanel.Resize += (_, _) => _embedding.Resize(
@@ -124,6 +140,15 @@ namespace DofusTabs.UI
             var instance = _instances.FirstOrDefault(i => i.ProcessId == processId);
             if (instance != null)
                 Dispatcher.Invoke(() => ActivateAccount(instance));
+        }
+
+        private void OnPrimaryRequested()
+        {
+            var primary = _instances.FirstOrDefault(i => i.IsEnabled && IsPrimaryInstance(i));
+            if (primary == null)
+                return;
+
+            Dispatcher.Invoke(() => ActivateAccount(primary));
         }
 
         // ── Refresh ──────────────────────────────────────────────────────────
@@ -191,8 +216,12 @@ namespace DofusTabs.UI
             if (sender is not ContextMenu menu)
                 return;
 
-            if (menu.Items.OfType<MenuItem>().FirstOrDefault() is not MenuItem toggleItem)
+            var items = menu.Items.OfType<MenuItem>().ToList();
+            if (items.Count < 2)
                 return;
+
+            var toggleItem = items[0];
+            var setPrimaryItem = items[1];
 
             if (menu.PlacementTarget is not FrameworkElement target || target.DataContext is not GameInstance instance)
                 return;
@@ -201,6 +230,12 @@ namespace DofusTabs.UI
                 ? "Deshabilitar cuenta"
                 : "Habilitar cuenta";
             toggleItem.Tag = instance;
+
+            setPrimaryItem.Header = instance.IsPrimary
+                ? "Ya es el personaje principal"
+                : "Volver principal a este";
+            setPrimaryItem.IsEnabled = !instance.IsPrimary;
+            setPrimaryItem.Tag = instance;
         }
 
         private void ToggleAccountEnabledFromSidebar_Click(object sender, RoutedEventArgs e)
@@ -214,6 +249,21 @@ namespace DofusTabs.UI
 
             AccountsListBox.SelectedItem = current;
             ToggleSelectedAccountEnabled();
+        }
+
+        private void SetPrimaryFromSidebar_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem item || item.Tag is not GameInstance instance)
+                return;
+
+            var current = _instances.FirstOrDefault(i => i.ProcessId == instance.ProcessId);
+            if (current == null)
+                return;
+
+            _primaryCharacterName = GetPrimaryIdentity(current);
+            AccountsListBox.SelectedItem = current;
+            UpdateActiveFlags();
+            PersistInteractiveState("set primary");
         }
 
         private void ActivateAccount(GameInstance instance)
@@ -371,7 +421,10 @@ namespace DofusTabs.UI
         private void UpdateActiveFlags()
         {
             foreach (var inst in _instances)
+            {
                 inst.IsActive = _activeProcessId.HasValue && inst.ProcessId == _activeProcessId.Value;
+                inst.IsPrimary = IsPrimaryInstance(inst);
+            }
 
             AccountsSummaryText.Text = $"{_instances.Count} cuentas";
         }
@@ -382,8 +435,16 @@ namespace DofusTabs.UI
 
             var selectedProcessId = (AccountsListBox.SelectedItem as GameInstance)?.ProcessId;
 
-            AccountsListBox.ItemsSource = null;
-            AccountsListBox.ItemsSource = _instances;
+            var desiredOrder = _instances.Select(i => i.ProcessId).ToList();
+            bool mustRebind = _sidebarRenderedOrder.Count != desiredOrder.Count ||
+                              !_sidebarRenderedOrder.SequenceEqual(desiredOrder);
+
+            if (mustRebind)
+            {
+                AccountsListBox.ItemsSource = null;
+                AccountsListBox.ItemsSource = _instances;
+                _sidebarRenderedOrder = desiredOrder;
+            }
 
             if (_activeProcessId.HasValue)
             {
@@ -404,6 +465,264 @@ namespace DofusTabs.UI
         private void AccountsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
             UpdateSettingsWindowState();
 
+        private void AccountsListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _sidebarDragStart = e.GetPosition(AccountsListBox);
+            _sidebarDragSource = TryGetSidebarInstanceFromElement(e.OriginalSource as DependencyObject);
+        }
+
+        private void AccountsListBox_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isSidebarDragging || _sidebarDragSource == null)
+                return;
+
+            if (e.LeftButton != MouseButtonState.Pressed)
+                return;
+
+            var currentPos = e.GetPosition(AccountsListBox);
+            if (Math.Abs(currentPos.X - _sidebarDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(currentPos.Y - _sidebarDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+                return;
+
+            _isSidebarDragging = true;
+            _sidebarDragSourceItem = AccountsListBox.ItemContainerGenerator.ContainerFromItem(_sidebarDragSource) as ListBoxItem;
+            ApplySidebarDragSourceVisual(isDragging: true);
+            try
+            {
+                DragDrop.DoDragDrop(AccountsListBox, _sidebarDragSource, DragDropEffects.Move);
+            }
+            finally
+            {
+                ClearSidebarDragVisuals();
+            }
+        }
+
+        private void AccountsListBox_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = e.Data.GetDataPresent(typeof(GameInstance))
+                ? DragDropEffects.Move
+                : DragDropEffects.None;
+
+            if (e.Effects == DragDropEffects.None)
+            {
+                ClearSidebarDropTargetVisual();
+                e.Handled = true;
+                return;
+            }
+
+            UpdateSidebarDropTargetVisual(e.OriginalSource as DependencyObject, e.GetPosition(AccountsListBox));
+            e.Handled = true;
+        }
+
+        private void AccountsListBox_DragLeave(object sender, DragEventArgs e)
+        {
+            // Evita limpiar si seguimos dentro de la list durante el drag.
+            if (AccountsListBox.IsMouseOver)
+                return;
+
+            ClearSidebarDropTargetVisual();
+        }
+
+        private void AccountsListBox_Drop(object sender, DragEventArgs e)
+        {
+            try
+            {
+                if (!e.Data.GetDataPresent(typeof(GameInstance)))
+                    return;
+
+                if (e.Data.GetData(typeof(GameInstance)) is not GameInstance dragged)
+                    return;
+
+                int sourceIndex = _instances.FindIndex(i => i.ProcessId == dragged.ProcessId);
+                if (sourceIndex < 0)
+                    return;
+
+                int targetIndex = ResolveDropTargetIndex(e.OriginalSource as DependencyObject, e.GetPosition(AccountsListBox));
+                if (targetIndex < 0)
+                    targetIndex = _instances.Count - 1;
+
+                if (sourceIndex == targetIndex || sourceIndex + 1 == targetIndex)
+                    return;
+
+                var ordered = _instances.ToList();
+                var moved = ordered[sourceIndex];
+                ordered.RemoveAt(sourceIndex);
+
+                if (targetIndex > sourceIndex)
+                    targetIndex--;
+
+                targetIndex = Math.Clamp(targetIndex, 0, ordered.Count);
+                ordered.Insert(targetIndex, moved);
+
+                for (int i = 0; i < ordered.Count; i++)
+                    ordered[i].DisplayOrder = i;
+
+                _instances = ordered;
+                UpdateSidebar();
+                AccountsListBox.SelectedItem = _instances.FirstOrDefault(i => i.ProcessId == dragged.ProcessId);
+                PersistInteractiveState("drag reorder");
+                UpdateSettingsWindowState();
+            }
+            finally
+            {
+                ClearSidebarDragVisuals();
+            }
+        }
+
+        private int ResolveDropTargetIndex(DependencyObject? originalSource, Point dropPosition)
+        {
+            var item = FindAncestor<ListBoxItem>(originalSource);
+            if (item == null || item.DataContext is not GameInstance target)
+                return _instances.Count;
+
+            int index = _instances.FindIndex(i => i.ProcessId == target.ProcessId);
+            if (index < 0)
+                return _instances.Count;
+
+            var itemTop = item.TranslatePoint(new Point(0, 0), AccountsListBox).Y;
+            bool insertAfter = dropPosition.Y > itemTop + (item.ActualHeight / 2.0);
+            return insertAfter ? index + 1 : index;
+        }
+
+        private GameInstance? TryGetSidebarInstanceFromElement(DependencyObject? source)
+        {
+            var item = FindAncestor<ListBoxItem>(source);
+            return item?.DataContext as GameInstance;
+        }
+
+        private static T? FindAncestor<T>(DependencyObject? source) where T : DependencyObject
+        {
+            var current = source;
+            while (current != null)
+            {
+                if (current is T matched)
+                    return matched;
+
+                current = GetParent(current);
+            }
+
+            return null;
+        }
+
+        private static DependencyObject? GetParent(DependencyObject source)
+        {
+            if (source is Visual)
+                return VisualTreeHelper.GetParent(source);
+
+            if (source is FrameworkContentElement content)
+                return content.Parent;
+
+            return null;
+        }
+
+        private void UpdateSidebarDropTargetVisual(DependencyObject? originalSource, Point dropPosition)
+        {
+            var targetItem = FindAncestor<ListBoxItem>(originalSource);
+            if (targetItem == null)
+            {
+                ClearSidebarDropTargetVisual();
+                return;
+            }
+
+            bool insertAfter = dropPosition.Y > targetItem.TranslatePoint(new Point(0, 0), AccountsListBox).Y + (targetItem.ActualHeight / 2.0);
+            if (_sidebarDropTargetItem == targetItem && _sidebarDropInsertAfter == insertAfter)
+                return;
+
+            ClearSidebarDropTargetVisual();
+
+            _sidebarDropTargetItem = targetItem;
+            _sidebarDropInsertAfter = insertAfter;
+
+            _sidebarDropTargetItem.Background = SidebarDropTargetBrush;
+
+            var (_, translate) = EnsureItemTransforms(_sidebarDropTargetItem);
+            var nudge = new DoubleAnimation
+            {
+                To = insertAfter ? 3 : -3,
+                Duration = TimeSpan.FromMilliseconds(120),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            translate.BeginAnimation(TranslateTransform.YProperty, nudge);
+        }
+
+        private void ClearSidebarDropTargetVisual()
+        {
+            if (_sidebarDropTargetItem == null)
+                return;
+
+            _sidebarDropTargetItem.Background = Brushes.Transparent;
+
+            var (_, translate) = EnsureItemTransforms(_sidebarDropTargetItem);
+            var reset = new DoubleAnimation
+            {
+                To = 0,
+                Duration = TimeSpan.FromMilliseconds(120),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            translate.BeginAnimation(TranslateTransform.YProperty, reset);
+
+            _sidebarDropTargetItem = null;
+            _sidebarDropInsertAfter = false;
+        }
+
+        private void ApplySidebarDragSourceVisual(bool isDragging)
+        {
+            if (_sidebarDragSourceItem == null)
+                return;
+
+            var (scale, _) = EnsureItemTransforms(_sidebarDragSourceItem);
+
+            var opacity = new DoubleAnimation
+            {
+                To = isDragging ? 0.58 : 1.0,
+                Duration = TimeSpan.FromMilliseconds(120),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            _sidebarDragSourceItem.BeginAnimation(OpacityProperty, opacity);
+
+            double targetScale = isDragging ? 0.96 : 1.0;
+            var scaleAnim = new DoubleAnimation
+            {
+                To = targetScale,
+                Duration = TimeSpan.FromMilliseconds(120),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleAnim);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnim);
+        }
+
+        private void ClearSidebarDragVisuals()
+        {
+            ClearSidebarDropTargetVisual();
+            ApplySidebarDragSourceVisual(isDragging: false);
+
+            _isSidebarDragging = false;
+            _sidebarDragSource = null;
+            _sidebarDragSourceItem = null;
+        }
+
+        private static (ScaleTransform scale, TranslateTransform translate) EnsureItemTransforms(ListBoxItem item)
+        {
+            if (item.RenderTransform is TransformGroup group &&
+                group.Children.Count >= 2 &&
+                group.Children[0] is ScaleTransform existingScale &&
+                group.Children[1] is TranslateTransform existingTranslate)
+            {
+                return (existingScale, existingTranslate);
+            }
+
+            var scale = new ScaleTransform(1, 1);
+            var translate = new TranslateTransform(0, 0);
+            item.RenderTransformOrigin = new Point(0.5, 0.5);
+            item.RenderTransform = new TransformGroup
+            {
+                Children = new TransformCollection { scale, translate }
+            };
+
+            return (scale, translate);
+        }
+
         private void OpenSettingsWindow()
         {
             if (_settingsWindow != null)
@@ -415,12 +734,14 @@ namespace DofusTabs.UI
             }
 
             _settingsWindow = new SettingsWindow(
-                onHotkeysChanged: (next, prev) =>
+                onHotkeysChanged: (next, prev, primary) =>
                 {
                     _nextHotkey     = next;
                     _previousHotkey = prev;
+                    _primaryHotkey  = primary;
                     _hotkeys.Register(_hotkeys.NextHotkeyId,     next);
                     _hotkeys.Register(_hotkeys.PreviousHotkeyId, prev);
+                    _hotkeys.Register(_hotkeys.PrimaryHotkeyId,  primary);
                     PersistInteractiveState("hotkeys");
                 },
                 onCaptureModeChanged: suspended => _hotkeys.SetSuspended(suspended),
@@ -447,6 +768,7 @@ namespace DofusTabs.UI
             {
                 NextHotkey                = _nextHotkey,
                 PreviousHotkey            = _previousHotkey,
+                PrimaryHotkey             = _primaryHotkey,
                 ShowSidebarNames          = _showSidebarNames,
             };
         }
@@ -533,6 +855,15 @@ namespace DofusTabs.UI
                 .ToList();
         }
 
+        private bool IsPrimaryInstance(GameInstance instance) =>
+            !string.IsNullOrWhiteSpace(_primaryCharacterName) &&
+            string.Equals(GetPrimaryIdentity(instance), _primaryCharacterName, StringComparison.OrdinalIgnoreCase);
+
+        private static string GetPrimaryIdentity(GameInstance instance) =>
+            string.IsNullOrWhiteSpace(instance.SidebarCharacterName)
+                ? instance.ProcessId.ToString()
+                : instance.SidebarCharacterName;
+
         // ── Tray ─────────────────────────────────────────────────────────────
 
         private void SetupTrayIcon()
@@ -590,25 +921,7 @@ namespace DofusTabs.UI
 
         protected override void OnClosing(CancelEventArgs e)
         {
-            if (!_exitConfirmed)
-            {
-                if (HasRunningDofusClients())
-                {
-                    var result = MessageBox.Show(
-                        "Al cerrar DofusTabs se cerrarán todas las cuentas de Dofus abiertas.\n\n¿Deseas continuar?",
-                        "Confirmar salida",
-                        MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-
-                    if (result != MessageBoxResult.Yes)
-                    {
-                        e.Cancel = true;
-                        _isExiting = false;
-                        return;
-                    }
-                }
-                _exitConfirmed = true;
-                _isExiting     = true;
-            }
+            _isExiting = true;
 
             SaveCurrentSettings();
 
@@ -620,7 +933,6 @@ namespace DofusTabs.UI
 
             DetachGameThread();
             _embedding.RestoreAll();
-            CloseAllDofusClients();
 
             _watcher.Stop();
             _hotkeys.Dispose();
@@ -646,6 +958,8 @@ namespace DofusTabs.UI
                 var saved = _settings.Load();
                 saved.NextHotkey     = _nextHotkey;
                 saved.PreviousHotkey = _previousHotkey;
+                saved.PrimaryHotkey  = _primaryHotkey;
+                saved.PrimaryCharacterName = _primaryCharacterName;
                 saved.ShowSidebarNames = _showSidebarNames;
                 saved.Instances.Clear();
                 foreach (var inst in _instances)
@@ -669,49 +983,5 @@ namespace DofusTabs.UI
             }
         }
 
-        private bool HasRunningDofusClients()
-        {
-            try { return _discovery.GetSnapshot(preserveState: false).Any(); }
-            catch { return false; }
-        }
-
-        private void CloseAllDofusClients()
-        {
-            List<uint> pids;
-            try
-            {
-                pids = _discovery.GetSnapshot(preserveState: false)
-                    .Select(i => i.ProcessId).Distinct().ToList();
-            }
-            catch { return; }
-
-            foreach (var pid in pids) TryCloseGracefully(pid);
-            foreach (var pid in pids) TryForceKill(pid);
-        }
-
-        private static void TryCloseGracefully(uint pid)
-        {
-            try
-            {
-                var p = Process.GetProcessById((int)pid);
-                if (!p.HasExited && p.CloseMainWindow())
-                    p.WaitForExit(1200);
-            }
-            catch { }
-        }
-
-        private static void TryForceKill(uint pid)
-        {
-            try
-            {
-                var p = Process.GetProcessById((int)pid);
-                if (!p.HasExited)
-                {
-                    p.Kill(entireProcessTree: true);
-                    p.WaitForExit(1200);
-                }
-            }
-            catch { }
-        }
     }
 }

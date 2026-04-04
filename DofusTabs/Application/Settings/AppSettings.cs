@@ -12,6 +12,11 @@ namespace DofusTabs.Application.Settings
         public HotkeyBinding PreviousHotkey { get; set; } =
             new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
 
+        public HotkeyBinding PrimaryHotkey { get; set; } =
+            new HotkeyBinding(ModifierKeys.Alt, Key.Home);
+
+        public string PrimaryCharacterName { get; set; } = string.Empty;
+
         public bool ShowSidebarNames { get; set; } = false;
 
         public List<InstanceSettings> Instances { get; set; } = new List<InstanceSettings>();
