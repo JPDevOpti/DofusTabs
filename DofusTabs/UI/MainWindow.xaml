@@ -89,47 +89,89 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Button Style="{StaticResource SidebarBubbleButtonStyle}" Click="AccountBubble_Click" Tag="{Binding}" ToolTip="{Binding DisplayTitle}">
-                                    <Grid Width="34" Height="34" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                        <Ellipse Fill="#2D3333" Stroke="#D5C17A" StrokeThickness="2"/>
-                                        <Image Source="{Binding IconPath}" Width="20" Height="20" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <Image.Style>
-                                                <Style TargetType="Image">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IconPath}" Value="">
+                                <Border x:Name="SelectedAccountBackground"
+                                        Background="Transparent"
+                                        BorderBrush="Transparent"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="1">
+                                    <StackPanel Orientation="Vertical" HorizontalAlignment="Center">
+                                        <Button Style="{StaticResource SidebarBubbleButtonStyle}"
+                                                Click="AccountBubble_Click"
+                                                PreviewMouseRightButtonDown="AccountBubble_PreviewMouseRightButtonDown"
+                                                Tag="{Binding}"
+                                                ToolTip="{Binding SidebarCharacterName}">
+                                            <Button.ContextMenu>
+                                                <ContextMenu Opened="AccountContextMenu_Opened">
+                                                    <MenuItem Click="ToggleAccountEnabledFromSidebar_Click"/>
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
+                                            <Grid Width="34" Height="34" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                <Ellipse Fill="#2D3333" Stroke="#D5C17A" StrokeThickness="2"/>
+                                                <Image Source="{Binding IconPath}" Width="24" Height="24" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <Image.Style>
+                                                        <Style TargetType="Image">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IconPath}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Image.Style>
+                                                </Image>
+                                                <TextBlock Text="{Binding AvatarInitial}" FontSize="12" FontWeight="Bold" Foreground="#EEE6C9" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
                                                             <Setter Property="Visibility" Value="Collapsed"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Image.Style>
-                                        </Image>
-                                        <TextBlock Text="{Binding AvatarInitial}" FontSize="12" FontWeight="Bold" Foreground="#EEE6C9" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IconPath}" Value="">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <Ellipse Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,0,1">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="#7CD75F"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                                    <Setter Property="Fill" Value="#D75F5F"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="{Binding SidebarCharacterName}"
+                                                   Margin="0,2,0,0"
+                                                   Width="46"
+                                                   FontSize="9"
+                                                   Foreground="#CFD6D6"
+                                                   TextAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IconPath}" Value="">
+                                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBox}, Path=Tag}" Value="True">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <Ellipse Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,0,1">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="#707878"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                            <Setter Property="Fill" Value="#7CD75F"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                        </Ellipse>
-                                    </Grid>
-                                </Button>
+                                    </StackPanel>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                        <Setter TargetName="SelectedAccountBackground" Property="Background" Value="#2B3131"/>
+                                        <Setter TargetName="SelectedAccountBackground" Property="BorderBrush" Value="#4A5353"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -152,7 +194,7 @@
 
             <Border Grid.Column="1" Margin="4" Background="#0F1010" BorderBrush="#353B3B" BorderThickness="1">
                 <Grid Background="#080909">
-                    <wfi:WindowsFormsHost x:Name="GameHost">
+                    <wfi:WindowsFormsHost x:Name="GameHost" Focusable="False">
                         <wf:Panel x:Name="GameHostPanel" BackColor="Black"/>
                     </wfi:WindowsFormsHost>
                     <TextBlock x:Name="EmptyHostText"

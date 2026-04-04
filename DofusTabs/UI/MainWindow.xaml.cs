@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using DofusTabs.Application.Services;
 using DofusTabs.Application.Settings;
@@ -28,6 +29,10 @@ namespace DofusTabs.UI
 
         private List<GameInstance> _instances = new();
         private uint? _activeProcessId;
+        private uint _attachedGameThreadId;
+        private HotkeyBinding _nextHotkey     = new(ModifierKeys.Alt, Key.Tab);
+        private HotkeyBinding _previousHotkey = new(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
+        private bool _showSidebarNames;
         private Forms.NotifyIcon? _notifyIcon;
         private SettingsWindow? _settingsWindow;
         private bool _isExiting;
@@ -63,9 +68,13 @@ namespace DofusTabs.UI
 
             var savedSettings = _settings.Load();
 
-            // Registrar hotkeys globales con los bindings guardados
-            _hotkeys.Register(_hotkeys.NextHotkeyId,     savedSettings.NextHotkey);
-            _hotkeys.Register(_hotkeys.PreviousHotkeyId, savedSettings.PreviousHotkey);
+            _nextHotkey     = savedSettings.NextHotkey;
+            _previousHotkey = savedSettings.PreviousHotkey;
+            _showSidebarNames = savedSettings.ShowSidebarNames;
+            ApplySidebarVisualOptions();
+
+            _hotkeys.Register(_hotkeys.NextHotkeyId,     _nextHotkey);
+            _hotkeys.Register(_hotkeys.PreviousHotkeyId, _previousHotkey);
 
             _hotkeys.NextRequested               += OnNextRequested;
             _hotkeys.PreviousRequested           += OnPreviousRequested;
@@ -74,7 +83,6 @@ namespace DofusTabs.UI
             GameHostPanel.Resize += (_, _) => _embedding.Resize(
                 Math.Max(1, GameHostPanel.ClientSize.Width),
                 Math.Max(1, GameHostPanel.ClientSize.Height));
-            GameHost.GotKeyboardFocus += (_, _) => FocusCurrentEmbeddedWindow();
             GameHostPanel.Enter += (_, _) => FocusCurrentEmbeddedWindow();
 
             _watcher.ProcessAppeared    += (_, _) => Dispatcher.Invoke(() => Refresh(selectFallback: false));
@@ -125,17 +133,16 @@ namespace DofusTabs.UI
 
         private void Refresh(bool selectFallback)
         {
-            _instances = _discovery
-                .GetSnapshot()
-                .OrderBy(i => i.DisplayOrder)
-                .ThenBy(i => i.CharacterName)
-                .ToList();
+            _instances = SortSidebarInstances(_discovery.GetSnapshot());
 
-            // Si la cuenta activa ya no existe, liberar embedding
-            if (_activeProcessId.HasValue && !_instances.Any(i => i.ProcessId == _activeProcessId.Value))
+            var activePids = _instances.Select(i => i.ProcessId).ToHashSet();
+            foreach (var pid in _embedding.EmbeddedProcessIds)
             {
-                _embedding.Restore(_activeProcessId.Value);
-                _activeProcessId = null;
+                if (!activePids.Contains(pid))
+                {
+                    if (_activeProcessId == pid) _activeProcessId = null;
+                    _embedding.Restore(pid);
+                }
             }
 
             UpdateActiveFlags();
@@ -173,10 +180,52 @@ namespace DofusTabs.UI
             }
         }
 
+        private void AccountBubble_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is GameInstance instance)
+                AccountsListBox.SelectedItem = instance;
+        }
+
+        private void AccountContextMenu_Opened(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ContextMenu menu)
+                return;
+
+            if (menu.Items.OfType<MenuItem>().FirstOrDefault() is not MenuItem toggleItem)
+                return;
+
+            if (menu.PlacementTarget is not FrameworkElement target || target.DataContext is not GameInstance instance)
+                return;
+
+            toggleItem.Header = instance.IsEnabled
+                ? "Deshabilitar cuenta"
+                : "Habilitar cuenta";
+            toggleItem.Tag = instance;
+        }
+
+        private void ToggleAccountEnabledFromSidebar_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem item || item.Tag is not GameInstance instance)
+                return;
+
+            var current = _instances.FirstOrDefault(i => i.ProcessId == instance.ProcessId);
+            if (current == null)
+                return;
+
+            AccountsListBox.SelectedItem = current;
+            ToggleSelectedAccountEnabled();
+        }
+
         private void ActivateAccount(GameInstance instance)
         {
             if (!instance.IsEnabled)
                 return;
+
+            if (_activeProcessId.HasValue && _activeProcessId.Value == instance.ProcessId)
+            {
+                FocusCurrentEmbeddedWindow();
+                return;
+            }
 
             if (!_discovery.TryGetWindowHandle(instance.ProcessId, out var gameHandle))
             {
@@ -221,10 +270,7 @@ namespace DofusTabs.UI
                 _hotkeys.UnregisterForInstance(selected.ProcessId);
 
                 if (_activeProcessId == selected.ProcessId)
-                {
-                    _embedding.Restore(selected.ProcessId);
                     _activeProcessId = null;
-                }
             }
             else if (selected.IndividualHotkey != null && !selected.IndividualHotkey.IsEmpty)
             {
@@ -294,6 +340,7 @@ namespace DofusTabs.UI
 
         private void RestoreEmbeddedClientButton_Click(object sender, RoutedEventArgs e)
         {
+            DetachGameThread();
             if (_activeProcessId.HasValue)
                 _embedding.Restore(_activeProcessId.Value);
 
@@ -331,10 +378,7 @@ namespace DofusTabs.UI
 
         private void UpdateSidebar()
         {
-            _instances = _instances
-                .OrderBy(i => i.DisplayOrder)
-                .ThenBy(i => i.CharacterName)
-                .ToList();
+            _instances = SortSidebarInstances(_instances);
 
             var selectedProcessId = (AccountsListBox.SelectedItem as GameInstance)?.ProcessId;
 
@@ -371,9 +415,21 @@ namespace DofusTabs.UI
             }
 
             _settingsWindow = new SettingsWindow(
-                onToggleEnable: ToggleSelectedAccountEnabled,
-                onMoveUp: () => MoveSelectedAccount(-1),
-                onMoveDown: () => MoveSelectedAccount(1))
+                onHotkeysChanged: (next, prev) =>
+                {
+                    _nextHotkey     = next;
+                    _previousHotkey = prev;
+                    _hotkeys.Register(_hotkeys.NextHotkeyId,     next);
+                    _hotkeys.Register(_hotkeys.PreviousHotkeyId, prev);
+                    PersistInteractiveState("hotkeys");
+                },
+                onCaptureModeChanged: suspended => _hotkeys.SetSuspended(suspended),
+                onShowSidebarNamesChanged: showNames =>
+                {
+                    _showSidebarNames = showNames;
+                    ApplySidebarVisualOptions();
+                    PersistInteractiveState("sidebar names");
+                })
             {
                 Owner = this
             };
@@ -387,33 +443,11 @@ namespace DofusTabs.UI
 
         private SettingsViewState BuildSettingsViewState()
         {
-            var selected = AccountsListBox.SelectedItem as GameInstance;
-            var ordered = _instances
-                .OrderBy(i => i.DisplayOrder)
-                .ThenBy(i => i.CharacterName)
-                .ToList();
-
-            int selectedIndex = selected == null
-                ? -1
-                : ordered.FindIndex(i => i.ProcessId == selected.ProcessId);
-
-            bool hasSelected = selected != null;
-            string selectedLabel = hasSelected
-                ? $"{selected!.CharacterName} ({selected.CharacterClass})"
-                : "Sin cuenta seleccionada";
-
-            string selectedState = hasSelected
-                ? (selected!.IsEnabled ? "Habilitada en la rotación" : "Deshabilitada en la rotación")
-                : "Selecciona una burbuja en la sidebar";
-
             return new SettingsViewState
             {
-                SelectedAccountLabel = selectedLabel,
-                SelectedAccountStateLabel = selectedState,
-                HasSelectedAccount = hasSelected,
-                SelectedAccountEnabled = selected?.IsEnabled ?? false,
-                CanMoveUp = hasSelected && selectedIndex > 0,
-                CanMoveDown = hasSelected && selectedIndex >= 0 && selectedIndex < ordered.Count - 1,
+                NextHotkey                = _nextHotkey,
+                PreviousHotkey            = _previousHotkey,
+                ShowSidebarNames          = _showSidebarNames,
             };
         }
 
@@ -443,28 +477,38 @@ namespace DofusTabs.UI
             if (mainHandle == IntPtr.Zero)
                 return;
 
-            uint uiThreadId = User32.GetCurrentThreadId();
+            uint uiThreadId  = User32.GetCurrentThreadId();
             uint gameThreadId = User32.GetWindowThreadProcessId(gameHandle, out _);
             if (gameThreadId == 0)
                 return;
 
-            bool attached = false;
-            try
-            {
-                if (gameThreadId != uiThreadId)
-                    attached = User32.AttachThreadInput(uiThreadId, gameThreadId, true);
+            EnsureGameThreadAttached(uiThreadId, gameThreadId);
+            User32.SetForegroundWindow(mainHandle);
+            User32.SetFocus(gameHandle);
+        }
 
-                // Transferir el foco de teclado al cliente embebido para no perder input.
-                User32.SetForegroundWindow(mainHandle);
-                GameHost.Focus();
-                GameHostPanel.Focus();
-                User32.SetFocus(gameHandle);
-            }
-            finally
+        private void EnsureGameThreadAttached(uint uiThreadId, uint gameThreadId)
+        {
+            if (gameThreadId == uiThreadId) return;
+
+            if (_attachedGameThreadId != 0 && _attachedGameThreadId != gameThreadId)
             {
-                if (attached)
-                    User32.AttachThreadInput(uiThreadId, gameThreadId, false);
+                User32.AttachThreadInput(uiThreadId, _attachedGameThreadId, false);
+                _attachedGameThreadId = 0;
             }
+
+            if (_attachedGameThreadId == 0)
+            {
+                User32.AttachThreadInput(uiThreadId, gameThreadId, true);
+                _attachedGameThreadId = gameThreadId;
+            }
+        }
+
+        private void DetachGameThread()
+        {
+            if (_attachedGameThreadId == 0) return;
+            User32.AttachThreadInput(User32.GetCurrentThreadId(), _attachedGameThreadId, false);
+            _attachedGameThreadId = 0;
         }
 
         private GameInstance? GetSelectedInstance()
@@ -473,6 +517,20 @@ namespace DofusTabs.UI
                 return selected;
 
             return null;
+        }
+
+        private void ApplySidebarVisualOptions()
+        {
+            AccountsListBox.Tag = _showSidebarNames;
+        }
+
+        private static List<GameInstance> SortSidebarInstances(IEnumerable<GameInstance> instances)
+        {
+            return instances
+                .OrderBy(i => i.IsEnabled ? 0 : 1)
+                .ThenBy(i => i.DisplayOrder)
+                .ThenBy(i => i.CharacterName)
+                .ToList();
         }
 
         // ── Tray ─────────────────────────────────────────────────────────────
@@ -560,6 +618,7 @@ namespace DofusTabs.UI
                 _settingsWindow = null;
             }
 
+            DetachGameThread();
             _embedding.RestoreAll();
             CloseAllDofusClients();
 
@@ -585,15 +644,18 @@ namespace DofusTabs.UI
             try
             {
                 var saved = _settings.Load();
+                saved.NextHotkey     = _nextHotkey;
+                saved.PreviousHotkey = _previousHotkey;
+                saved.ShowSidebarNames = _showSidebarNames;
                 saved.Instances.Clear();
                 foreach (var inst in _instances)
                 {
                     saved.Instances.Add(new InstanceSettings
                     {
-                        ProcessId       = inst.ProcessId,
-                        Title           = inst.WindowTitle,
-                        IsEnabled       = inst.IsEnabled,
-                        DisplayOrder    = inst.DisplayOrder,
+                        ProcessId        = inst.ProcessId,
+                        Title            = inst.WindowTitle,
+                        IsEnabled        = inst.IsEnabled,
+                        DisplayOrder     = inst.DisplayOrder,
                         IndividualHotkey = inst.IndividualHotkey,
                     });
                 }

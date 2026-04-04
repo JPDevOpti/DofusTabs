@@ -6,31 +6,18 @@ using DofusTabs.Application.Services;
 
 namespace DofusTabs.Infrastructure.Embedding
 {
-    /// <summary>
-    /// Registro thread-safe de instancias embebidas actualmente activas.
-    /// Fuente de verdad para RecoveryService: sabe exactamente qué restaurar.
-    /// </summary>
     public sealed class EmbeddingRegistry : IEmbeddingRegistry
     {
-        /// <summary>
-        /// Nombres de proceso del juego conocidos. Fuente única para toda la app
-        /// (RecoveryService, WindowEnumerator).
-        /// </summary>
         public static readonly IReadOnlySet<string> KnownProcessNames =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "dofus", "dofustouch" };
 
         private readonly ConcurrentDictionary<uint, IntPtr> _hwndByPid = new();
         private readonly ConcurrentDictionary<uint, EmbeddedWindowSnapshot> _snapshotByPid = new();
 
-        public void Register(uint processId, IntPtr hwnd)
-        {
-            _hwndByPid[processId] = hwnd;
-        }
+        public void Register(uint processId, IntPtr hwnd) => _hwndByPid[processId] = hwnd;
 
-        internal void RegisterSnapshot(uint processId, EmbeddedWindowSnapshot snapshot)
-        {
+        internal void RegisterSnapshot(uint processId, EmbeddedWindowSnapshot snapshot) =>
             _snapshotByPid[processId] = snapshot;
-        }
 
         public void Unregister(uint processId)
         {

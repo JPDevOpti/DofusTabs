@@ -12,6 +12,8 @@ namespace DofusTabs.Infrastructure.Settings
 {
     public sealed class SettingsService : ISettingsService
     {
+        private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
+
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "DofusTabs", "settings.json");
@@ -39,11 +41,11 @@ namespace DofusTabs.Infrastructure.Settings
         {
             try
             {
-                var v2 = ToV2(settings);
-                var json = JsonSerializer.Serialize(v2, new JsonSerializerOptions { WriteIndented = true });
+                var v2   = ToV2(settings);
+                var json = JsonSerializer.Serialize(v2, WriteOptions);
 
                 var dir = Path.GetDirectoryName(SettingsPath)!;
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                Directory.CreateDirectory(dir);
 
                 var tmpPath = SettingsPath + ".tmp";
                 var bakPath = SettingsPath + ".bak";
@@ -61,8 +63,6 @@ namespace DofusTabs.Infrastructure.Settings
             }
         }
 
-        // ── Conversiones V2 ↔ AppSettings ───────────────────────────────────
-
         private static AppSettings ToAppSettings(SettingsV2 v2)
         {
             return new AppSettings
@@ -73,6 +73,7 @@ namespace DofusTabs.Infrastructure.Settings
                 PreviousHotkey = SanitizeGlobalBinding(
                     ParseBinding(v2.PreviousHotkeyModifiers, v2.PreviousHotkeyKey),
                     new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab)),
+                ShowSidebarNames = v2.ShowSidebarNames,
                 Instances      = MapInstances(v2.Instances),
             };
         }
@@ -86,16 +87,16 @@ namespace DofusTabs.Infrastructure.Settings
                 if (!string.IsNullOrWhiteSpace(r.HotkeyKey))
                 {
                     var parsed = ParseBinding(r.HotkeyModifiers, r.HotkeyKey);
-                    if (!parsed.IsEmpty && HasSupportedModifier(parsed.Modifiers))
+                    if (!parsed.IsEmpty)
                         individual = parsed;
                 }
 
                 result.Add(new InstanceSettings
                 {
-                    ProcessId       = r.ProcessId,
-                    Title           = r.Title,
-                    IsEnabled       = r.IsEnabled,
-                    DisplayOrder    = r.DisplayOrder,
+                    ProcessId        = r.ProcessId,
+                    Title            = r.Title,
+                    IsEnabled        = r.IsEnabled,
+                    DisplayOrder     = r.DisplayOrder,
                     IndividualHotkey = individual,
                 });
             }
@@ -110,19 +111,20 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = s.NextHotkey.Key.ToString(),
                 PreviousHotkeyModifiers = ModifiersToString(s.PreviousHotkey.Modifiers),
                 PreviousHotkeyKey       = s.PreviousHotkey.Key.ToString(),
+                ShowSidebarNames        = s.ShowSidebarNames,
             };
 
             foreach (var inst in s.Instances)
             {
                 v2.Instances.Add(new InstanceSettingsV2
                 {
-                    ProcessId    = inst.ProcessId,
-                    Title        = inst.Title,
-                    IsEnabled    = inst.IsEnabled,
-                    DisplayOrder = inst.DisplayOrder,
+                    ProcessId       = inst.ProcessId,
+                    Title           = inst.Title,
+                    IsEnabled       = inst.IsEnabled,
+                    DisplayOrder    = inst.DisplayOrder,
                     HotkeyModifiers = inst.IndividualHotkey != null
                         ? ModifiersToString(inst.IndividualHotkey.Modifiers) : string.Empty,
-                    HotkeyKey = inst.IndividualHotkey != null && HasSupportedModifier(inst.IndividualHotkey.Modifiers)
+                    HotkeyKey       = inst.IndividualHotkey != null
                         ? inst.IndividualHotkey.Key.ToString()
                         : string.Empty,
                 });
@@ -131,8 +133,6 @@ namespace DofusTabs.Infrastructure.Settings
             return v2;
         }
 
-        // ── Helpers de serialización de hotkeys ─────────────────────────────
-
         private static HotkeyBinding ParseBinding(string modifiersStr, string keyStr)
         {
             var modifiers = ModifierKeys.None;
@@ -140,8 +140,8 @@ namespace DofusTabs.Infrastructure.Settings
             {
                 var t = part.Trim();
                 if (t is "Control" or "Ctrl") modifiers |= ModifierKeys.Control;
-                else if (t == "Alt")   modifiers |= ModifierKeys.Alt;
-                else if (t == "Shift") modifiers |= ModifierKeys.Shift;
+                else if (t == "Alt")          modifiers |= ModifierKeys.Alt;
+                else if (t == "Shift")        modifiers |= ModifierKeys.Shift;
             }
 
             if (!Enum.TryParse<Key>(keyStr, out var key)) key = Key.None;
@@ -157,14 +157,7 @@ namespace DofusTabs.Infrastructure.Settings
             return string.Join(",", parts);
         }
 
-        private static HotkeyBinding SanitizeGlobalBinding(HotkeyBinding binding, HotkeyBinding fallback)
-        {
-            if (binding.IsEmpty || !HasSupportedModifier(binding.Modifiers))
-                return fallback;
-            return binding;
-        }
-
-        private static bool HasSupportedModifier(ModifierKeys modifiers) =>
-            (modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0;
+        private static HotkeyBinding SanitizeGlobalBinding(HotkeyBinding binding, HotkeyBinding fallback) =>
+            binding.IsEmpty ? fallback : binding;
     }
 }

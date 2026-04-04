@@ -9,11 +9,6 @@ using DofusTabs.Infrastructure.Embedding;
 
 namespace DofusTabs.Infrastructure.ProcessWatcher
 {
-    /// <summary>
-    /// Polling ligero (1s) sobre nombres de proceso del juego.
-    /// Dispara ProcessAppeared/ProcessDisappeared en el hilo del dispatcher.
-    /// No llama a EnumWindows — solo Process.GetProcessesByName, que es muy barato.
-    /// </summary>
     public sealed class ProcessWatcher : IProcessWatcher
     {
         private readonly DispatcherTimer _timer;
@@ -30,7 +25,6 @@ namespace DofusTabs.Infrastructure.ProcessWatcher
 
         public void Start() => _timer.Start();
         public void Stop()  => _timer.Stop();
-
         public void Dispose() => _timer.Stop();
 
         private void OnTick(object? sender, EventArgs e)
@@ -62,7 +56,7 @@ namespace DofusTabs.Infrastructure.ProcessWatcher
                     foreach (var p in Process.GetProcessesByName(name))
                         result.Add(p.Id);
                 }
-                catch { /* proceso ya no existe */ }
+                catch { }
             }
             return result;
         }

@@ -2,7 +2,6 @@ using System.Collections.Generic;
 
 namespace DofusTabs.Infrastructure.Settings
 {
-    /// <summary>Shape del JSON de settings en versión 2 (con SchemaVersion e Instances).</summary>
     internal sealed class SettingsV2
     {
         public int SchemaVersion { get; set; } = 2;
@@ -11,6 +10,7 @@ namespace DofusTabs.Infrastructure.Settings
         public string NextHotkeyKey           { get; set; } = "Tab";
         public string PreviousHotkeyModifiers { get; set; } = "Alt,Shift";
         public string PreviousHotkeyKey       { get; set; } = "Tab";
+        public bool ShowSidebarNames          { get; set; } = false;
 
         public List<InstanceSettingsV2> Instances { get; set; } = new();
     }

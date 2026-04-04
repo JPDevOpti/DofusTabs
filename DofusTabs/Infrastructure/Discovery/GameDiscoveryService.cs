@@ -10,7 +10,6 @@ namespace DofusTabs.Infrastructure.Discovery
 {
     public sealed class GameDiscoveryService : IGameDiscoveryService
     {
-        // Estado interno preservado entre snapshots
         private Dictionary<uint, GameInstance> _previousInstances = new();
         private Dictionary<uint, IntPtr> _handleMap = new();
 
@@ -25,29 +24,26 @@ namespace DofusTabs.Infrastructure.Discovery
                     .First())
                 .ToList();
 
-            // Calcular DisplayOrder máximo del ciclo anterior para nuevas instancias
             int nextOrder = _previousInstances.Any()
                 ? _previousInstances.Values.Max(i => i.DisplayOrder) + 1
                 : 0;
 
-            var newInstances = new Dictionary<uint, GameInstance>();
-            var newHandleMap = new Dictionary<uint, IntPtr>();
+            var newInstances = new Dictionary<uint, GameInstance>(bestWindows.Count);
+            var newHandleMap = new Dictionary<uint, IntPtr>(bestWindows.Count);
 
             foreach (var raw in bestWindows)
             {
-                GameInstance instance;
+                var instance = GameInstance.FromWindowData(raw.ProcessId, raw.Title, raw.ProcessName);
+
                 if (preserveState && _previousInstances.TryGetValue(raw.ProcessId, out var existing))
                 {
-                    // Ventana conocida: preservar estado mutable
-                    instance = GameInstance.FromWindowData(raw.ProcessId, raw.Title, raw.ProcessName);
-                    instance.IsEnabled      = existing.IsEnabled;
-                    instance.DisplayOrder   = existing.DisplayOrder;
+                    instance.IsEnabled        = existing.IsEnabled;
+                    instance.DisplayOrder     = existing.DisplayOrder;
                     instance.IndividualHotkey = existing.IndividualHotkey;
-                    instance.IsActive       = existing.IsActive;
+                    instance.IsActive         = existing.IsActive;
                 }
                 else
                 {
-                    instance = GameInstance.FromWindowData(raw.ProcessId, raw.Title, raw.ProcessName);
                     instance.DisplayOrder = nextOrder++;
                 }
 
@@ -67,10 +63,6 @@ namespace DofusTabs.Infrastructure.Discovery
         public bool TryGetWindowHandle(uint processId, out IntPtr handle) =>
             _handleMap.TryGetValue(processId, out handle);
 
-        /// <summary>
-        /// Aplica configuración guardada (DisplayOrder, IsEnabled, IndividualHotkey) a las instancias actuales.
-        /// Llamar una vez en startup tras el primer GetSnapshot.
-        /// </summary>
         public void ApplyPersistedSettings(
             IReadOnlyList<Application.Settings.InstanceSettings> saved)
         {
@@ -78,8 +70,8 @@ namespace DofusTabs.Infrastructure.Discovery
             {
                 if (_previousInstances.TryGetValue(s.ProcessId, out var instance))
                 {
-                    instance.DisplayOrder   = s.DisplayOrder;
-                    instance.IsEnabled      = s.IsEnabled;
+                    instance.DisplayOrder     = s.DisplayOrder;
+                    instance.IsEnabled        = s.IsEnabled;
                     instance.IndividualHotkey = s.IndividualHotkey;
                 }
             }
@@ -87,23 +79,21 @@ namespace DofusTabs.Infrastructure.Discovery
 
         private static int ScoreTitle(string title)
         {
-            if (string.IsNullOrWhiteSpace(title))
-                return int.MinValue;
+            if (string.IsNullOrWhiteSpace(title)) return int.MinValue;
 
             string trimmed = title.Trim();
-            if (IsNoiseTitle(trimmed))
-                return int.MinValue + 100;
+            if (IsNoiseTitle(trimmed)) return int.MinValue + 100;
 
             int score = Math.Min(trimmed.Length, 120);
-            if (trimmed.Contains(" - ", StringComparison.Ordinal)) score += 180;
-            if (trimmed.Contains("|", StringComparison.Ordinal)) score += 60;
+            if (trimmed.Contains(" - ", StringComparison.Ordinal))    score += 180;
+            if (trimmed.Contains("|",   StringComparison.Ordinal))    score += 60;
             if (trimmed.Contains("dofus", StringComparison.OrdinalIgnoreCase)) score += 20;
             return score;
         }
 
         private static bool IsNoiseTitle(string title) =>
-            title.Equals("MSCTFIME UI", StringComparison.OrdinalIgnoreCase)
+            title.Equals("MSCTFIME UI",  StringComparison.OrdinalIgnoreCase)
             || title.Equals("Default IME", StringComparison.OrdinalIgnoreCase)
-            || title.Equals("Release", StringComparison.OrdinalIgnoreCase);
+            || title.Equals("Release",     StringComparison.OrdinalIgnoreCase);
     }
 }

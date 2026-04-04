@@ -1,56 +1,161 @@
-sing System;
+using System;
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using DofusTabs.Domain;
 
 namespace DofusTabs.UI
 {
     public sealed class SettingsViewState
     {
-        public string SelectedAccountLabel { get; init; } = "Sin cuenta seleccionada";
-        public string SelectedAccountStateLabel { get; init; } = "Selecciona una cuenta en la sidebar";
-        public bool HasSelectedAccount { get; init; }
-        public bool SelectedAccountEnabled { get; init; }
-        public bool CanMoveUp { get; init; }
-        public bool CanMoveDown { get; init; }
+        public HotkeyBinding NextHotkey { get; init; } = new(ModifierKeys.Alt, Key.Tab);
+        public HotkeyBinding PreviousHotkey { get; init; } = new(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
+        public bool ShowSidebarNames { get; init; }
     }
 
     public partial class SettingsWindow : Window
     {
-        private readonly Action _onToggleEnable;
-        private readonly Action _onMoveUp;
-        private readonly Action _onMoveDown;
+        private readonly Action<HotkeyBinding, HotkeyBinding> _onHotkeysChanged;
+        private readonly Action<bool> _onCaptureModeChanged;
+        private readonly Action<bool> _onShowSidebarNamesChanged;
+
+        private HotkeyBinding _currentNext;
+        private HotkeyBinding _currentPrev;
+
+        private enum CaptureTarget { None, Next, Previous }
+        private CaptureTarget _capturing = CaptureTarget.None;
+        private bool _updatingFromState;
+
+        private static readonly SolidColorBrush _captureBackground  = new(Color.FromRgb(0x2A, 0x2A, 0x1A));
+        private static readonly SolidColorBrush _captureBorder       = new(Color.FromRgb(0xD5, 0xC1, 0x7A));
+        private static readonly SolidColorBrush _normalBackground    = new(Color.FromRgb(0x2A, 0x2F, 0x2F));
+        private static readonly SolidColorBrush _normalBorder        = new(Color.FromRgb(0x3E, 0x45, 0x45));
 
         public SettingsWindow(
-            Action onToggleEnable,
-            Action onMoveUp,
-            Action onMoveDown)
+            Action<HotkeyBinding, HotkeyBinding> onHotkeysChanged,
+            Action<bool> onCaptureModeChanged,
+            Action<bool> onShowSidebarNamesChanged)
         {
-            _onToggleEnable = onToggleEnable;
-            _onMoveUp = onMoveUp;
-            _onMoveDown = onMoveDown;
+            _onHotkeysChanged     = onHotkeysChanged;
+            _onCaptureModeChanged = onCaptureModeChanged;
+            _onShowSidebarNamesChanged = onShowSidebarNamesChanged;
+
+            _currentNext = new HotkeyBinding(ModifierKeys.Alt, Key.Tab);
+            _currentPrev = new HotkeyBinding(ModifierKeys.Alt | ModifierKeys.Shift, Key.Tab);
 
             InitializeComponent();
         }
 
         public void UpdateState(SettingsViewState state)
         {
-            SelectedAccountText.Text = state.SelectedAccountLabel;
-            SelectedAccountStateText.Text = state.SelectedAccountStateLabel;
+            _updatingFromState = true;
+            ShowSidebarNamesCheckBox.IsChecked = state.ShowSidebarNames;
+            _updatingFromState = false;
 
-            ToggleEnableButton.IsEnabled = state.HasSelectedAccount;
-            ToggleEnableButton.Content = state.SelectedAccountEnabled
-                ? "Deshabilitar cuenta"
-                : "Habilitar cuenta";
-
-            MoveUpButton.IsEnabled = state.HasSelectedAccount && state.CanMoveUp;
-            MoveDownButton.IsEnabled = state.HasSelectedAccount && state.CanMoveDown;
+            if (_capturing == CaptureTarget.None)
+            {
+                _currentNext = state.NextHotkey;
+                _currentPrev = state.PreviousHotkey;
+                NextHotkeyButton.Content = state.NextHotkey.ToString();
+                PrevHotkeyButton.Content = state.PreviousHotkey.ToString();
+            }
         }
 
-        private void ToggleEnableButton_Click(object sender, RoutedEventArgs e) => _onToggleEnable();
+        protected override void OnPreviewKeyDown(KeyEventArgs e)
+        {
+            if (_capturing == CaptureTarget.None)
+            {
+                base.OnPreviewKeyDown(e);
+                return;
+            }
 
-        private void MoveUpButton_Click(object sender, RoutedEventArgs e) => _onMoveUp();
+            e.Handled = true;
 
-        private void MoveDownButton_Click(object sender, RoutedEventArgs e) => _onMoveDown();
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+            if (key == Key.Escape)
+            {
+                CancelCapture();
+                return;
+            }
+
+            if (IsModifierKey(key)) return;
+
+            CompleteCapture(new HotkeyBinding(Keyboard.Modifiers, key));
+        }
+
+        private void NextHotkeyButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_capturing == CaptureTarget.Next) { CancelCapture(); return; }
+            if (_capturing == CaptureTarget.Previous) CancelCapture();
+            StartCapture(CaptureTarget.Next);
+        }
+
+        private void PrevHotkeyButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_capturing == CaptureTarget.Previous) { CancelCapture(); return; }
+            if (_capturing == CaptureTarget.Next) CancelCapture();
+            StartCapture(CaptureTarget.Previous);
+        }
+
+        private void StartCapture(CaptureTarget target)
+        {
+            _capturing = target;
+            _onCaptureModeChanged(true);
+
+            var btn = target == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
+            btn.Content    = "Presiona combinación...";
+            btn.Background = _captureBackground;
+            btn.BorderBrush = _captureBorder;
+
+        }
+
+        private void CancelCapture()
+        {
+            var btn = _capturing == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
+            btn.Content     = (_capturing == CaptureTarget.Next ? _currentNext : _currentPrev).ToString();
+            btn.Background  = _normalBackground;
+            btn.BorderBrush = _normalBorder;
+
+            // hint cleared(_capturing);
+            _capturing = CaptureTarget.None;
+            _onCaptureModeChanged(false);
+        }
+
+        private void CompleteCapture(HotkeyBinding binding)
+        {
+            if (_capturing == CaptureTarget.Next)
+                _currentNext = binding;
+            else
+                _currentPrev = binding;
+
+            var btn = _capturing == CaptureTarget.Next ? NextHotkeyButton : PrevHotkeyButton;
+            btn.Content     = binding.ToString();
+            btn.Background  = _normalBackground;
+            btn.BorderBrush = _normalBorder;
+
+            // hint cleared(_capturing);
+            _capturing = CaptureTarget.None;
+            _onCaptureModeChanged(false);
+            _onHotkeysChanged(_currentNext, _currentPrev);
+        }
+
+
+        private static bool IsModifierKey(Key key) =>
+            key is Key.LeftCtrl or Key.RightCtrl
+                or Key.LeftAlt  or Key.RightAlt
+                or Key.LeftShift or Key.RightShift
+                or Key.LWin or Key.RWin
+                or Key.System;
+
+        private void ShowSidebarNamesCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_updatingFromState)
+                return;
+
+            _onShowSidebarNamesChanged(ShowSidebarNamesCheckBox.IsChecked == true);
+        }
+
+        private void CloseButton_Click(object sender, RoutedEventArgs e)         => Close();
     }
 }

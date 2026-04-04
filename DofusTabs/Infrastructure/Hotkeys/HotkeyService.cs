@@ -13,7 +13,6 @@ namespace DofusTabs.Infrastructure.Hotkeys
 {
     public sealed class HotkeyService : IHotkeyService
     {
-        // IDs reservados para hotkeys globales
         public int NextHotkeyId     => 1;
         public int PreviousHotkeyId => 2;
         private const int InstanceHotkeyBase = 100;
@@ -26,9 +25,7 @@ namespace DofusTabs.Infrastructure.Hotkeys
         private HwndSource? _hwndSource;
         private bool _suspended;
 
-        // Hotkeys globales registrados: id → binding
         private readonly Dictionary<int, HotkeyBinding> _globalHotkeys = new();
-        // Hotkeys de instancia: processId → (hotkeyId, binding)
         private readonly Dictionary<uint, (int HotkeyId, HotkeyBinding Binding)> _instanceHotkeys = new();
         private int _nextInstanceId = InstanceHotkeyBase;
 
@@ -36,8 +33,7 @@ namespace DofusTabs.Infrastructure.Hotkeys
         {
             void AttachHooks()
             {
-                if (_hwnd != IntPtr.Zero)
-                    return;
+                if (_hwnd != IntPtr.Zero) return;
 
                 _hwnd = new WindowInteropHelper(window).Handle;
                 _hwndSource = HwndSource.FromHwnd(_hwnd);
@@ -61,9 +57,9 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         public bool Register(int id, HotkeyBinding binding)
         {
-            if (!IsValidGlobalBinding(binding))
+            if (!IsValidBinding(binding))
             {
-                AppLogger.Warn($"HotkeyService: hotkey global inválido id={id} ({binding}). Se requiere al menos un modificador (Ctrl/Alt/Shift).");
+                AppLogger.Warn($"HotkeyService: hotkey global inválido id={id} ({binding}).");
                 Unregister(id);
                 return false;
             }
@@ -73,7 +69,7 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
             _globalHotkeys[id] = binding;
 
-            if (_hwnd == IntPtr.Zero) return true; // Se registrará al hacer Initialize
+            if (_hwnd == IntPtr.Zero) return true;
 
             uint mods = ModifiersToWin32(binding.Modifiers);
             uint vk   = (uint)KeyInterop.VirtualKeyFromKey(binding.Key);
@@ -92,18 +88,16 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         public bool RegisterForInstance(uint processId, HotkeyBinding binding)
         {
-            // Quitar hotkey previo de esta instancia
             UnregisterForInstance(processId);
 
-            if (!IsValidInstanceBinding(binding))
+            if (!IsValidBinding(binding))
             {
-                AppLogger.Warn($"HotkeyService: hotkey de instancia inválido pid={processId} ({binding}). Se requiere al menos un modificador (Ctrl/Alt/Shift).");
+                AppLogger.Warn($"HotkeyService: hotkey de instancia inválido pid={processId} ({binding}).");
                 return false;
             }
 
             if (_hwnd == IntPtr.Zero) return false;
 
-            // Quitar si la misma combinación estaba asignada a otra instancia
             var conflict = _instanceHotkeys
                 .FirstOrDefault(kvp => kvp.Key != processId && kvp.Value.Binding == binding);
             if (conflict.Key != 0)
@@ -152,8 +146,6 @@ namespace DofusTabs.Infrastructure.Hotkeys
             _hwndSource?.Dispose();
         }
 
-        // ── Privados ─────────────────────────────────────────────────────────
-
         private void ReRegisterAll()
         {
             foreach (var (id, binding) in _globalHotkeys)
@@ -172,11 +164,8 @@ namespace DofusTabs.Infrastructure.Hotkeys
 
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (msg != User32.WM_HOTKEY || _suspended)
-            {
-                if (msg == User32.WM_HOTKEY && _suspended) handled = true;
-                return IntPtr.Zero;
-            }
+            if (msg != User32.WM_HOTKEY) return IntPtr.Zero;
+            if (_suspended) { handled = true; return IntPtr.Zero; }
 
             int id = wParam.ToInt32();
 
@@ -212,13 +201,6 @@ namespace DofusTabs.Infrastructure.Hotkeys
             return val;
         }
 
-        private static bool IsValidGlobalBinding(HotkeyBinding binding) =>
-            !binding.IsEmpty && HasSupportedModifier(binding.Modifiers);
-
-        private static bool IsValidInstanceBinding(HotkeyBinding binding) =>
-            !binding.IsEmpty && HasSupportedModifier(binding.Modifiers);
-
-        private static bool HasSupportedModifier(ModifierKeys modifiers) =>
-            (modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0;
+        private static bool IsValidBinding(HotkeyBinding binding) => !binding.IsEmpty;
     }
 }

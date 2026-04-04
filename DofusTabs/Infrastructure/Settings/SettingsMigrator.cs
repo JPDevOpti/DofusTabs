@@ -4,10 +4,6 @@ using System.Text.Json;
 
 namespace DofusTabs.Infrastructure.Settings
 {
-    /// <summary>
-    /// Migra documentos JSON de settings de versiones antiguas a la versión actual (V2).
-    /// Cada migración es una función pura JsonDocument → SettingsV2.
-    /// </summary>
     internal static class SettingsMigrator
     {
         private const int CurrentVersion = 2;
@@ -20,7 +16,7 @@ namespace DofusTabs.Infrastructure.Settings
             {
                 1 => MigrateV1ToV2(doc),
                 2 => DeserializeV2(doc),
-                _ => new SettingsV2(), // versión desconocida: valores por defecto seguros
+                _ => new SettingsV2(),
             };
         }
 
@@ -28,7 +24,7 @@ namespace DofusTabs.Infrastructure.Settings
         {
             if (doc.RootElement.TryGetProperty("SchemaVersion", out var v) && v.TryGetInt32(out int ver))
                 return ver;
-            return 1; // Sin SchemaVersion = V1
+            return 1;
         }
 
         private static SettingsV2 MigrateV1ToV2(JsonDocument doc)
@@ -42,9 +38,9 @@ namespace DofusTabs.Infrastructure.Settings
                 NextHotkeyKey           = v1.NextHotkeyKey,
                 PreviousHotkeyModifiers = v1.PreviousHotkeyModifiers,
                 PreviousHotkeyKey       = v1.PreviousHotkeyKey,
+                ShowSidebarNames        = false,
             };
 
-            // Migrar Windows → Instances
             v2.Instances = v1.Windows.Select(w => new InstanceSettingsV2
             {
                 ProcessId       = w.ProcessId,
@@ -58,10 +54,7 @@ namespace DofusTabs.Infrastructure.Settings
             return v2;
         }
 
-        private static SettingsV2 DeserializeV2(JsonDocument doc)
-        {
-            return JsonSerializer.Deserialize<SettingsV2>(doc.RootElement.GetRawText())
-                   ?? new SettingsV2();
-        }
+        private static SettingsV2 DeserializeV2(JsonDocument doc) =>
+            JsonSerializer.Deserialize<SettingsV2>(doc.RootElement.GetRawText()) ?? new SettingsV2();
     }
 }

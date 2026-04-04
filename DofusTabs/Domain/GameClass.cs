@@ -22,25 +22,25 @@ namespace DofusTabs.Domain
 
         public static readonly IReadOnlyList<GameClass> All = new[]
         {
-            new GameClass("Aniripsa",   "Aniripsa.jpg",   new[] { "aniripsa" }),
-            new GameClass("Anutrof",    "Anutrof.jpg",    new[] { "anutrof" }),
-            new GameClass("Feca",       "Feca.jpg",       new[] { "feca" }),
+            new GameClass("Aniripsa",   "Aniripsa.png",   new[] { "aniripsa" }),
+            new GameClass("Anutrof",    "Anutrof.png",    new[] { "anutrof" }),
+            new GameClass("Feca",       "Feca.png",       new[] { "feca" }),
             new GameClass("Forjalanza", "Forjalanza.png", new[] { "forjalanza" }),
-            new GameClass("Hipermago",  "Hipermago.jpg",  new[] { "hipermago" }),
-            new GameClass("Ocra",       "Ocra.jpg",       new[] { "ocra" }),
-            new GameClass("Osamodas",   "Osamodas.jpg",   new[] { "osamodas" }),
-            new GameClass("Pandawa",    "Pandawa.jpg",    new[] { "pandawa" }),
-            new GameClass("Sacrógrito", "Sacrgrito.jpg",  new[] { "sacrogrito", "sacrógrito" }),
-            new GameClass("Sadida",     "Sadida.jpg",     new[] { "sadida" }),
-            new GameClass("Selotrop",   "Selotrop.jpg",   new[] { "selotrop" }),
-            new GameClass("Sram",       "Sram.jpg",       new[] { "sram" }),
-            new GameClass("Steamer",    "Steamer.jpg",    new[] { "steamer" }),
-            new GameClass("Tymador",    "Tymador.jpg",    new[] { "tymador" }),
-            new GameClass("Uginak",     "Uginak.jpg",     new[] { "uginak" }),
-            new GameClass("Xelor",      "Xelor.jpg",      new[] { "xelor" }),
-            new GameClass("Yopuka",     "Yopuka.jpg",     new[] { "yopuka" }),
-            new GameClass("Zobal",      "Zobal.jpg",      new[] { "zobal" }),
-            new GameClass("Zurcar",     "Zurcar.jpg",     new[] { "zurcar" }),
+            new GameClass("Hipermago",  "Hipermago.png",  new[] { "hipermago" }),
+            new GameClass("Ocra",       "Ocra.png",       new[] { "ocra" }),
+            new GameClass("Osamodas",   "Osamodas.png",   new[] { "osamodas" }),
+            new GameClass("Pandawa",    "Pandawa.png",    new[] { "pandawa" }),
+            new GameClass("Sacrógrito", "Sacrogrito.png", new[] { "sacrogrito", "sacrógrito" }),
+            new GameClass("Sadida",     "Sadida.png",     new[] { "sadida" }),
+            new GameClass("Selotrop",   "Selotrop.png",   new[] { "selotrop" }),
+            new GameClass("Sram",       "Sram.png",       new[] { "sram" }),
+            new GameClass("Steamer",    "Steamer.png",    new[] { "steamer" }),
+            new GameClass("Tymador",    "Tymador.png",    new[] { "tymador" }),
+            new GameClass("Uginak",     "Uginak.png",     new[] { "uginak" }),
+            new GameClass("Xelor",      "Xelor.png",      new[] { "xelor" }),
+            new GameClass("Yopuka",     "Yopuka.png",     new[] { "yopuka" }),
+            new GameClass("Zobal",      "Zobal.png",      new[] { "zobal" }),
+            new GameClass("Zurcar",     "Zurcar.png",     new[] { "zurcar" }),
         };
 
         private static readonly Dictionary<string, GameClass> _byAlias;
@@ -53,7 +53,6 @@ namespace DofusTabs.Domain
                     _byAlias[alias] = cls;
         }
 
-        /// <summary>Fail-fast: lanza si hay aliases duplicados. Llamar desde App.OnStartup.</summary>
         public static void ValidateNoDuplicateAliases()
         {
             var duplicated = All
@@ -68,7 +67,6 @@ namespace DofusTabs.Domain
                     $"Aliases duplicados en GameClass.All: {string.Join(", ", duplicated)}");
         }
 
-        /// <summary>Busca la clase cuyo alias aparece como palabra completa en el texto dado.</summary>
         public static GameClass? ResolveFromText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return null;
@@ -81,7 +79,6 @@ namespace DofusTabs.Domain
             return null;
         }
 
-        /// <summary>Normaliza a minúsculas sin diacríticos, reemplazando no-alfanuméricos con espacio.</summary>
         internal static string NormalizeText(string value)
         {
             string nfd = value.Normalize(NormalizationForm.FormD);
