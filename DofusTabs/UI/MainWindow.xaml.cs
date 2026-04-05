@@ -48,6 +48,10 @@ namespace DofusTabs.UI
         private bool _sidebarDropInsertAfter;
         private IReadOnlyList<uint> _sidebarRenderedOrder = Array.Empty<uint>();
         private readonly Dictionary<uint, (IntPtr Style, IntPtr ExStyle)> _foregroundDockOriginalStyles = new();
+        private int _pendingNavigationDelta;
+        private uint? _pendingActivationProcessId;
+        private bool _activationPumpScheduled;
+        private bool _activationPumpRunning;
 
         private static readonly SolidColorBrush SidebarDropTargetBrush = new(Color.FromArgb(70, 213, 193, 122));
 
@@ -120,27 +124,17 @@ namespace DofusTabs.UI
 
         private void OnNextRequested()
         {
-            var enabled = _instances.Where(i => i.IsEnabled).OrderBy(i => i.DisplayOrder).ToList();
-            if (!enabled.Any()) return;
-            int idx = enabled.FindIndex(i => i.ProcessId == _activeProcessId);
-            int next = (idx + 1) % enabled.Count;
-            Dispatcher.Invoke(() => ActivateAccount(enabled[next]));
+            QueueNavigationRequest(+1);
         }
 
         private void OnPreviousRequested()
         {
-            var enabled = _instances.Where(i => i.IsEnabled).OrderBy(i => i.DisplayOrder).ToList();
-            if (!enabled.Any()) return;
-            int idx = enabled.FindIndex(i => i.ProcessId == _activeProcessId);
-            int prev = (idx - 1 + enabled.Count) % enabled.Count;
-            Dispatcher.Invoke(() => ActivateAccount(enabled[prev]));
+            QueueNavigationRequest(-1);
         }
 
         private void OnInstanceActivationRequested(uint processId)
         {
-            var instance = _instances.FirstOrDefault(i => i.ProcessId == processId);
-            if (instance != null)
-                Dispatcher.Invoke(() => ActivateAccount(instance));
+            QueueExplicitActivation(processId);
         }
 
         private void OnPrimaryRequested()
@@ -149,7 +143,101 @@ namespace DofusTabs.UI
             if (primary == null)
                 return;
 
-            Dispatcher.Invoke(() => ActivateAccount(primary));
+            QueueExplicitActivation(primary.ProcessId);
+        }
+
+        private void QueueNavigationRequest(int delta)
+        {
+            _pendingNavigationDelta += delta;
+            _pendingActivationProcessId = null;
+            QueueActivationPump();
+        }
+
+        private void QueueExplicitActivation(uint processId)
+        {
+            _pendingActivationProcessId = processId;
+            _pendingNavigationDelta = 0;
+            QueueActivationPump();
+        }
+
+        private void QueueActivationPump()
+        {
+            if (_activationPumpScheduled)
+                return;
+
+            _activationPumpScheduled = true;
+            Dispatcher.BeginInvoke(
+                new Action(ProcessActivationPump),
+                System.Windows.Threading.DispatcherPriority.Send);
+        }
+
+        private void ProcessActivationPump()
+        {
+            _activationPumpScheduled = false;
+
+            if (_activationPumpRunning)
+            {
+                QueueActivationPump();
+                return;
+            }
+
+            _activationPumpRunning = true;
+            try
+            {
+                if (TryDequeueActivationTarget(out var target))
+                    ActivateAccount(target);
+            }
+            finally
+            {
+                _activationPumpRunning = false;
+            }
+
+            if (_pendingActivationProcessId.HasValue || _pendingNavigationDelta != 0)
+                QueueActivationPump();
+        }
+
+        private bool TryDequeueActivationTarget(out GameInstance target)
+        {
+            target = null!;
+
+            if (_pendingActivationProcessId.HasValue)
+            {
+                uint processId = _pendingActivationProcessId.Value;
+                _pendingActivationProcessId = null;
+                _pendingNavigationDelta = 0;
+
+                var direct = _instances.FirstOrDefault(i => i.IsEnabled && i.ProcessId == processId);
+                if (direct == null)
+                    return false;
+
+                target = direct;
+                return true;
+            }
+
+            if (_pendingNavigationDelta == 0)
+                return false;
+
+            int delta = _pendingNavigationDelta;
+            _pendingNavigationDelta = 0;
+
+            var enabled = _instances.Where(i => i.IsEnabled).OrderBy(i => i.DisplayOrder).ToList();
+            if (!enabled.Any())
+                return false;
+
+            int idx = enabled.FindIndex(i => i.ProcessId == _activeProcessId);
+            if (idx < 0)
+            {
+                target = enabled[0];
+                return true;
+            }
+
+            int steps = delta % enabled.Count;
+            if (steps == 0)
+                return false;
+
+            int targetIndex = ((idx + steps) % enabled.Count + enabled.Count) % enabled.Count;
+            target = enabled[targetIndex];
+            return true;
         }
 
         // ── Refresh ──────────────────────────────────────────────────────────
@@ -288,15 +376,14 @@ namespace DofusTabs.UI
                 return;
             }
 
-            PrimeGameForeground(gameHandle);
-
             // Para evitar cap de FPS por "background app" en drivers NVIDIA,
             // el cliente activo se deja top-level, pero acoplado visualmente al host.
-            _embedding.RestoreAll();
+            if (_embedding.EmbeddedProcessIds.Count > 0)
+                _embedding.RestoreAll();
 
             _activeProcessId = instance.ProcessId;
             UpdateActiveFlags();
-            UpdateSidebar();
+            AccountsListBox.SelectedItem = instance;
             EmptyHostText.Visibility = Visibility.Collapsed;
             TryFocusEmbeddedWindow(gameHandle);
             AppLogger.Info($"Cuenta activa en primer plano acoplado: {instance.CharacterName} (pid={instance.ProcessId})");
@@ -800,9 +887,6 @@ namespace DofusTabs.UI
                 return;
 
             FocusEmbeddedWindowCore(gameHandle);
-            Dispatcher.BeginInvoke(
-                new Action(() => FocusEmbeddedWindowCore(gameHandle)),
-                System.Windows.Threading.DispatcherPriority.Input);
         }
 
         private void FocusEmbeddedWindowCore(IntPtr gameHandle)
