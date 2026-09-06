@@ -1,4 +1,4 @@
-import type { HotkeyView } from "../ipc";
+import { ipc, type HotkeyView } from "../ipc";
 
 const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta", "AltGraph"]);
 
@@ -20,6 +20,21 @@ export interface HotkeyCaptureOptions {
   onChange(hotkey: HotkeyView | null): void;
 }
 
+// Global hotkeys are released while any capture widget is active so the
+// pressed combination reaches the widget instead of switching windows.
+// Reference-counted because several widgets share one backend.
+let activeCaptures = 0;
+
+function setSuspended(suspended: boolean): void {
+  activeCaptures += suspended ? 1 : -1;
+  const shouldSuspend = activeCaptures > 0;
+  if (shouldSuspend === suspended) {
+    void ipc.setHotkeysSuspended(suspended).catch((error) => {
+      console.error("[DofusTabs] failed to toggle hotkey suspension", error);
+    });
+  }
+}
+
 export function createHotkeyCapture(options: HotkeyCaptureOptions): HTMLElement {
   let current = options.initial;
 
@@ -35,9 +50,13 @@ export function createHotkeyCapture(options: HotkeyCaptureOptions): HTMLElement 
     el.classList.toggle("empty", !text);
   };
 
+  // Every exit path (Escape, Backspace, a captured combination, blur) goes
+  // through here, so the suspension is always lifted exactly once.
   const stop = () => {
+    if (!el.classList.contains("capturing")) return;
     el.classList.remove("capturing");
     el.removeEventListener("keydown", onKeyDown);
+    setSuspended(false);
     idle();
     el.blur();
   };
@@ -75,6 +94,7 @@ export function createHotkeyCapture(options: HotkeyCaptureOptions): HTMLElement 
     el.classList.add("capturing");
     el.textContent = "Presiona una combinación…";
     el.addEventListener("keydown", onKeyDown);
+    setSuspended(true);
     el.focus();
   });
 

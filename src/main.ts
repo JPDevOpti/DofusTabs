@@ -37,6 +37,10 @@ async function bootstrap(): Promise<void> {
 
     onReorder: (pids) => void ipc.reorder(pids).then(setInstances).catch(report),
 
+    onMoveUp: (pid) => void ipc.moveUp(pid).then(setInstances).catch(report),
+
+    onMoveDown: (pid) => void ipc.moveDown(pid).then(setInstances).catch(report),
+
     onSetEnabled: (pid, enabled) =>
       void ipc.setEnabled(pid, enabled).then(setInstances).catch(report),
 

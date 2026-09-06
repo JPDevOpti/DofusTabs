@@ -14,6 +14,8 @@ export interface SidebarHandlers {
   onToggleShowNames(show: boolean): void;
   onActivate(pid: number): void;
   onReorder(pids: number[]): void;
+  onMoveUp(pid: number): void;
+  onMoveDown(pid: number): void;
   onSetEnabled(pid: number, enabled: boolean): void;
   onSetPrimary(pid: number): void;
   onInstanceHotkeyChange(pid: number, hotkey: HotkeyView | null): void;
@@ -114,7 +116,15 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
     const instance = currentState.instances.find((i) => i.pid === pid);
     if (!instance) return;
 
+    // Moves stay inside the account's own enabled/disabled group.
+    const group = orderedInstances().filter((i) => i.enabled === instance.enabled);
+    const position = group.findIndex((i) => i.pid === pid);
+    const canMoveUp = position > 0;
+    const canMoveDown = position >= 0 && position < group.length - 1;
+
     menu.replaceChildren(
+      menuItem("Subir", () => handlers.onMoveUp(pid), canMoveUp),
+      menuItem("Bajar", () => handlers.onMoveDown(pid), canMoveDown),
       menuItem(instance.enabled ? "Deshabilitar cuenta" : "Habilitar cuenta", () =>
         handlers.onSetEnabled(pid, !instance.enabled),
       ),
@@ -131,8 +141,12 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
     menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - rect.height - 8))}px`;
   };
 
+  // Same order the backend uses for its views: enabled first, then by
+  // display order within each group.
   const orderedInstances = () =>
-    [...currentState.instances].sort((a, b) => a.displayOrder - b.displayOrder);
+    [...currentState.instances].sort(
+      (a, b) => Number(!a.enabled) - Number(!b.enabled) || a.displayOrder - b.displayOrder,
+    );
 
   const handleDrop = (targetPid: number) => {
     if (draggedPid === null || draggedPid === targetPid) return;

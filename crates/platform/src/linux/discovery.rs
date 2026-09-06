@@ -1,4 +1,5 @@
 use crate::{is_game_process_name, DiscoveredWindow, GameDiscovery, PlatformError, WindowRef};
+use dofustabs_core::window_selection::best_per_pid;
 use serde::Deserialize;
 
 /// Discovers game windows through `hyprctl clients -j`.
@@ -40,7 +41,7 @@ fn parse_clients(json: &str) -> Result<Vec<DiscoveredWindow>, PlatformError> {
     let clients: Vec<HyprClient> = serde_json::from_str(json)
         .map_err(|e| PlatformError::InvalidData(format!("hyprctl clients JSON: {e}")))?;
 
-    Ok(clients
+    let windows = clients
         .into_iter()
         .filter(|c| {
             c.pid > 0
@@ -52,7 +53,11 @@ fn parse_clients(json: &str) -> Result<Vec<DiscoveredWindow>, PlatformError> {
             process_name: if c.class.is_empty() { c.initial_class } else { c.class },
             window_ref: WindowRef::WaylandAddress(c.address),
         })
-        .collect())
+        .collect();
+
+    // A client may own several windows (splash, helper frames); keep the one
+    // whose title identifies the character.
+    Ok(best_per_pid(windows, |w| w.pid, |w| &w.title))
 }
 
 #[cfg(test)]
@@ -111,6 +116,19 @@ mod tests {
         let windows = parse_clients(json).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].process_name, "Dofus");
+    }
+
+    #[test]
+    fn keeps_the_best_titled_window_per_pid() {
+        let json = r#"[
+            {"address": "0x1", "pid": 10, "title": "Release", "class": "Dofus.x64", "initialClass": "Dofus.x64"},
+            {"address": "0x2", "pid": 10, "title": "Ana - Feca - Dofus", "class": "Dofus.x64", "initialClass": "Dofus.x64"},
+            {"address": "0x3", "pid": 10, "title": "Dofus", "class": "Dofus.x64", "initialClass": "Dofus.x64"}
+        ]"#;
+        let windows = parse_clients(json).unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].title, "Ana - Feca - Dofus");
+        assert_eq!(windows[0].window_ref, WindowRef::WaylandAddress("0x2".to_string()));
     }
 
     #[test]

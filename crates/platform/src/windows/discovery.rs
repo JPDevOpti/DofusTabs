@@ -9,6 +9,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
 
+use dofustabs_core::window_selection::best_per_pid;
+
 use crate::{is_game_process_name, DiscoveredWindow, GameDiscovery, PlatformError, WindowRef};
 
 pub struct WindowsDiscovery;
@@ -42,7 +44,9 @@ impl GameDiscovery for WindowsDiscovery {
             ));
         }
 
-        Ok(ctx.found)
+        // A client may own several visible windows (IME helpers, "Release"
+        // frames); keep the one whose title identifies the character.
+        Ok(best_per_pid(ctx.found, |w| w.pid, |w| &w.title))
     }
 }
 

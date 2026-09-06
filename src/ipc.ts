@@ -40,6 +40,10 @@ export const ipc = {
 
   reorder: (pids: number[]): Promise<InstanceView[]> => invoke("reorder", { pids }),
 
+  moveUp: (pid: number): Promise<InstanceView[]> => invoke("move_up", { pid }),
+
+  moveDown: (pid: number): Promise<InstanceView[]> => invoke("move_down", { pid }),
+
   setPrimary: (pid: number): Promise<InstanceView[]> => invoke("set_primary", { pid }),
 
   getSettings: (): Promise<SettingsView> => invoke("get_settings"),
@@ -51,6 +55,9 @@ export const ipc = {
     invoke("set_instance_hotkey", { pid, hotkey }),
 
   setShowNames: (show: boolean): Promise<void> => invoke("set_show_names", { show }),
+
+  setHotkeysSuspended: (suspended: boolean): Promise<void> =>
+    invoke("set_hotkeys_suspended", { suspended }),
 };
 
 export function onInstancesChanged(

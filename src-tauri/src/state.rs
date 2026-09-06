@@ -4,7 +4,9 @@ use std::sync::Mutex;
 use dofustabs_core::instance::parse_title;
 use dofustabs_core::rotation::ActivationQueue;
 use dofustabs_core::settings::{AppSettings, Hotkey, InstanceSettings};
-use dofustabs_platform::{DiscoveredWindow, HotkeyBackend, WindowActivator, WindowRef};
+use dofustabs_platform::{
+    DiscoveredWindow, GameDiscovery, HotkeyBackend, WindowActivator, WindowRef,
+};
 use serde::{Deserialize, Serialize};
 
 /// One tracked game client with its parsed identity and per-instance options.
@@ -61,6 +63,7 @@ pub struct SharedState(pub Mutex<AppState>);
 /// state first, then platform, never the reverse.
 #[derive(Default)]
 pub struct PlatformHandles {
+    pub discovery: Mutex<Option<Box<dyn GameDiscovery + Send>>>,
     pub activator: Mutex<Option<Box<dyn WindowActivator + Send>>>,
     pub hotkeys: Mutex<Option<Box<dyn HotkeyBackend + Send>>>,
 }
@@ -99,8 +102,68 @@ impl AppState {
                 is_active: self.active_pid == Some(i.pid),
             })
             .collect();
-        views.sort_by_key(|v| v.display_order);
+        // Disabled accounts sink to the bottom; the sort is stable so each
+        // group keeps its display order.
+        views.sort_by_key(|v| (!v.enabled, v.display_order));
         views
+    }
+
+    /// Pids in the order the sidebar shows them (enabled first, then by
+    /// display order within each group).
+    pub fn visual_order(&self) -> Vec<u32> {
+        let mut ordered: Vec<&TrackedInstance> = self.instances.iter().collect();
+        ordered.sort_by_key(|i| (!i.enabled, i.display_order));
+        ordered.iter().map(|i| i.pid).collect()
+    }
+
+    /// Listed pids take positions 0..n in the given order; unlisted ones keep
+    /// their relative order after them.
+    pub fn apply_order(&mut self, pids: &[u32]) {
+        let known: Vec<u32> = self.instances.iter().map(|i| i.pid).collect();
+        let mut next = pids.len() as i32;
+        for pid in &known {
+            if !pids.contains(pid) {
+                if let Some(i) = self.instances.iter_mut().find(|i| i.pid == *pid) {
+                    i.display_order = next;
+                    next += 1;
+                }
+            }
+        }
+        for (index, pid) in pids.iter().enumerate() {
+            if let Some(i) = self.instances.iter_mut().find(|i| i.pid == *pid) {
+                i.display_order = index as i32;
+            }
+        }
+    }
+
+    /// Moves `pid` one step up (`-1`) or down (`+1`) among the accounts in
+    /// its own enabled/disabled group. Returns false when it cannot move
+    /// (unknown pid or already at the edge of its group).
+    pub fn move_instance(&mut self, pid: u32, delta: i32) -> bool {
+        let Some(enabled) = self.instances.iter().find(|i| i.pid == pid).map(|i| i.enabled) else {
+            return false;
+        };
+        let mut order = self.visual_order();
+        let group: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                self.instances
+                    .iter()
+                    .any(|i| i.pid == **p && i.enabled == enabled)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let Some(slot) = group.iter().position(|&index| order[index] == pid) else {
+            return false;
+        };
+        let target = slot as i32 + delta;
+        if target < 0 || target >= group.len() as i32 {
+            return false;
+        }
+        order.swap(group[slot], group[target as usize]);
+        self.apply_order(&order);
+        true
     }
 
     pub fn settings_view(&self) -> SettingsView {
@@ -418,6 +481,83 @@ mod tests {
         assert_eq!(views[1].pid, 10);
         assert!(views[1].is_active);
         assert_eq!(views[1].icon_file.as_deref(), Some("Feca.png"));
+    }
+
+    #[test]
+    fn disabled_accounts_sort_last_keeping_their_relative_order() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+                discovered(30, "Caro - Xelor - Dofus"),
+                discovered(40, "Dani - Osamodas - Dofus"),
+            ],
+            &[],
+        );
+        // display order: 10=0, 20=1, 30=2, 40=3; disable 10 and 30
+        instances[0].enabled = false;
+        instances[2].enabled = false;
+
+        let state = state_with(instances);
+        let pids: Vec<u32> = state.to_views().iter().map(|v| v.pid).collect();
+        assert_eq!(pids, vec![20, 40, 10, 30]);
+        assert_eq!(state.visual_order(), vec![20, 40, 10, 30]);
+    }
+
+    #[test]
+    fn apply_order_places_listed_pids_first_and_keeps_the_rest_after() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+                discovered(30, "Caro - Xelor - Dofus"),
+            ],
+            &[],
+        );
+        let mut state = state_with(instances);
+
+        state.apply_order(&[30, 10]);
+
+        let order = |pid: u32| state.instances.iter().find(|i| i.pid == pid).unwrap().display_order;
+        assert_eq!(order(30), 0);
+        assert_eq!(order(10), 1);
+        assert_eq!(order(20), 2);
+    }
+
+    #[test]
+    fn move_instance_swaps_with_neighbour_in_same_group() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+                discovered(30, "Caro - Xelor - Dofus"),
+                discovered(40, "Dani - Osamodas - Dofus"),
+            ],
+            &[],
+        );
+        instances[1].enabled = false; // 20 disabled
+        let mut state = state_with(instances);
+        assert_eq!(state.visual_order(), vec![10, 30, 40, 20]);
+
+        assert!(state.move_instance(40, -1));
+        assert_eq!(state.visual_order(), vec![10, 40, 30, 20]);
+
+        assert!(state.move_instance(10, 1));
+        assert_eq!(state.visual_order(), vec![40, 10, 30, 20]);
+
+        // Edges of the enabled group and of the disabled group do not move.
+        assert!(!state.move_instance(40, -1));
+        assert!(!state.move_instance(30, 1));
+        assert!(!state.move_instance(20, -1));
+        assert!(!state.move_instance(20, 1));
+        assert!(!state.move_instance(999, 1));
+        assert_eq!(state.visual_order(), vec![40, 10, 30, 20]);
     }
 
     #[test]

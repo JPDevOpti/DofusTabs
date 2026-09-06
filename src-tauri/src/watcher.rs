@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use dofustabs_platform::{GameDiscovery, HotkeyId};
+use dofustabs_platform::{DiscoveredWindow, HotkeyId, PlatformError};
 
 use crate::state::{sync_instances, PlatformHandles, SharedState};
 
@@ -10,17 +10,16 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Spawns the discovery loop: an immediate first scan, then one per second.
 /// Emits `instances-changed` only when the scan actually changed something.
-pub fn start(app: AppHandle, discovery: Box<dyn GameDiscovery + Send>) {
+/// The discovery backend lives in [`PlatformHandles`] so a manual refresh can
+/// run the same scan on demand.
+pub fn start(app: AppHandle) {
     std::thread::Builder::new()
         .name("game-watcher".to_string())
         .spawn(move || {
             let mut scan_failed = false;
             loop {
-                match discovery.scan() {
-                    Ok(windows) => {
-                        scan_failed = false;
-                        apply_scan(&app, &windows);
-                    }
+                match scan_now(&app) {
+                    Ok(()) => scan_failed = false,
                     Err(err) => {
                         // Log the transition only, not every failing tick.
                         if !scan_failed {
@@ -35,7 +34,22 @@ pub fn start(app: AppHandle, discovery: Box<dyn GameDiscovery + Send>) {
         .expect("failed to spawn watcher thread");
 }
 
-fn apply_scan(app: &AppHandle, windows: &[dofustabs_platform::DiscoveredWindow]) {
+/// Runs one discovery scan and reconciles the tracked instances with it.
+/// Without a discovery backend (degraded mode) this is a no-op.
+pub fn scan_now(app: &AppHandle) -> Result<(), PlatformError> {
+    let windows = {
+        let handles = app.state::<PlatformHandles>();
+        let guard = handles.discovery.lock().unwrap();
+        match guard.as_ref() {
+            Some(discovery) => discovery.scan()?,
+            None => return Ok(()),
+        }
+    };
+    apply_scan(app, &windows);
+    Ok(())
+}
+
+fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
     let state = app.state::<SharedState>();
     let mut s = state.0.lock().unwrap();
 

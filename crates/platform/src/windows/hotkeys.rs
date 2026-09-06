@@ -54,6 +54,11 @@ pub struct WindowsHotkeys {
     /// Read by the worker to translate a fired Win32 id back to a HotkeyId.
     id_to_hotkey: Arc<Mutex<HashMap<i32, HotkeyId>>>,
     assigned: HashMap<HotkeyId, i32>,
+    /// Win32 modifiers/vk per assigned id, so a suspended backend can
+    /// re-register everything on resume.
+    combos: HashMap<i32, (u32, u32)>,
+    /// While true, nothing in `assigned` is registered with Win32.
+    suspended: bool,
     next_instance_id: i32,
 }
 
@@ -86,6 +91,8 @@ impl WindowsHotkeys {
             handler,
             id_to_hotkey,
             assigned: HashMap::new(),
+            combos: HashMap::new(),
+            suspended: false,
             next_instance_id: ID_INSTANCE_BASE,
         })
     }
@@ -137,14 +144,30 @@ impl WindowsHotkeys {
             reply_rx,
         )
     }
+
+    fn register_win_id(&self, win_id: i32, modifiers: u32, vk: u32) -> Result<(), PlatformError> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.send_and_wait(
+            Command::Register {
+                win_id,
+                modifiers,
+                vk,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+    }
 }
 
 impl HotkeyBackend for WindowsHotkeys {
     fn register(&mut self, id: HotkeyId, hotkey: &Hotkey) -> Result<(), PlatformError> {
         // Re-register semantics: always drop the previous combination first.
         if let Some(&win_id) = self.assigned.get(&id) {
-            self.unregister_win_id(win_id)?;
+            if !self.suspended {
+                self.unregister_win_id(win_id)?;
+            }
             self.id_to_hotkey.lock().unwrap().remove(&win_id);
+            self.combos.remove(&win_id);
             self.assigned.remove(&id);
         }
 
@@ -157,18 +180,13 @@ impl HotkeyBackend for WindowsHotkeys {
         })?;
 
         let win_id = self.win_id_for(id);
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.send_and_wait(
-            Command::Register {
-                win_id,
-                modifiers: modifiers | MOD_NOREPEAT,
-                vk,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )?;
+        let modifiers = modifiers | MOD_NOREPEAT;
+        if !self.suspended {
+            self.register_win_id(win_id, modifiers, vk)?;
+        }
 
         self.assigned.insert(id, win_id);
+        self.combos.insert(win_id, (modifiers, vk));
         self.id_to_hotkey.lock().unwrap().insert(win_id, id);
         Ok(())
     }
@@ -178,11 +196,37 @@ impl HotkeyBackend for WindowsHotkeys {
             return Ok(()); // idempotent, matching the Linux backend
         };
         self.id_to_hotkey.lock().unwrap().remove(&win_id);
+        self.combos.remove(&win_id);
+        if self.suspended {
+            return Ok(());
+        }
         self.unregister_win_id(win_id)
     }
 
     fn set_handler(&mut self, handler: HotkeyHandler) {
         *self.handler.lock().unwrap() = Some(handler);
+    }
+
+    /// `RegisterHotKey` swallows the combination system-wide, so suspending
+    /// really unregisters everything and resume registers it back.
+    fn set_suspended(&mut self, suspended: bool) -> Result<(), PlatformError> {
+        if self.suspended == suspended {
+            return Ok(());
+        }
+        self.suspended = suspended;
+
+        let mut first_error = None;
+        for (&win_id, &(modifiers, vk)) in &self.combos {
+            let result = if suspended {
+                self.unregister_win_id(win_id)
+            } else {
+                self.register_win_id(win_id, modifiers, vk)
+            };
+            if let Err(err) = result {
+                first_error.get_or_insert(err);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 

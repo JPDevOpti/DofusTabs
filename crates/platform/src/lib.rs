@@ -93,6 +93,11 @@ pub trait HotkeyBackend {
     fn register(&mut self, id: HotkeyId, hotkey: &Hotkey) -> Result<(), PlatformError>;
     fn unregister(&mut self, id: HotkeyId) -> Result<(), PlatformError>;
     fn set_handler(&mut self, handler: HotkeyHandler);
+    /// Temporarily releases every registered combination at the OS level so
+    /// the keys reach the focused app again (used while the UI captures a new
+    /// hotkey); `false` restores them. Registrations made while suspended are
+    /// remembered and applied on resume.
+    fn set_suspended(&mut self, suspended: bool) -> Result<(), PlatformError>;
 }
 
 /// True for process/class names that belong to a game client ("Dofus",

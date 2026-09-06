@@ -2,11 +2,12 @@ mod commands;
 mod hotkey_dispatch;
 mod settings_io;
 mod state;
+mod tray;
 mod watcher;
 
 use std::sync::Mutex;
 
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 use dofustabs_platform::{
     GameDiscovery, HotkeyBackend, HotkeyId, PlatformError, WindowActivator,
@@ -47,11 +48,14 @@ pub fn run() {
             commands::activate,
             commands::set_enabled,
             commands::reorder,
+            commands::move_up,
+            commands::move_down,
             commands::set_primary,
             commands::get_settings,
             commands::set_global_hotkey,
             commands::set_instance_hotkey,
             commands::set_show_names,
+            commands::set_hotkeys_suspended,
         ])
         .setup(|app| {
             let settings_path = match app.path().app_config_dir() {
@@ -65,6 +69,8 @@ pub fn run() {
             let settings = settings_io::load(&settings_path);
             app.manage(SharedState(Mutex::new(AppState::new(settings, settings_path))));
             app.manage(PlatformHandles::default());
+
+            tray::setup(app.handle())?;
 
             match create_backend() {
                 Ok((discovery, activator, mut hotkeys)) => {
@@ -85,10 +91,11 @@ pub fn run() {
                     }
 
                     let handles = app.state::<PlatformHandles>();
+                    *handles.discovery.lock().unwrap() = Some(discovery);
                     *handles.activator.lock().unwrap() = Some(activator);
                     *handles.hotkeys.lock().unwrap() = Some(hotkeys);
 
-                    watcher::start(app.handle().clone(), discovery);
+                    watcher::start(app.handle().clone());
                 }
                 Err(err) => {
                     // Degraded mode: the UI still works, but nothing can be
@@ -98,6 +105,16 @@ pub fn run() {
             }
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the main window hides it to the tray; the tray's Quit
+            // entry is the only way to really exit.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Err(err) = window.hide() {
+                    log::warn!("failed to hide main window: {err}");
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

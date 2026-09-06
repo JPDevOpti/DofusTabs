@@ -24,13 +24,26 @@ const O_NONBLOCK: i32 = 0o4000;
 pub struct HyprlandHotkeys {
     fifo_path: PathBuf,
     binds: HashMap<HotkeyId, BindSpec>,
+    /// While true, the binds in `binds` are not installed in Hyprland.
+    suspended: bool,
     handler: Arc<Mutex<Option<HotkeyHandler>>>,
     running: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
 }
 
 struct BindSpec {
+    bind_value: String,
     unbind_value: String,
+}
+
+fn bind(spec: &BindSpec) -> Result<(), PlatformError> {
+    let stdout = super::run_hyprctl(&["keyword", "bind", &spec.bind_value])?;
+    super::expect_ok(&format!("bind {}", spec.bind_value), &stdout)
+}
+
+fn unbind(spec: &BindSpec) -> Result<(), PlatformError> {
+    let stdout = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value])?;
+    super::expect_ok(&format!("unbind {}", spec.unbind_value), &stdout)
 }
 
 impl HyprlandHotkeys {
@@ -59,6 +72,7 @@ impl HyprlandHotkeys {
         Ok(Self {
             fifo_path,
             binds: HashMap::new(),
+            suspended: false,
             handler,
             running,
             reader: Some(reader),
@@ -73,16 +87,14 @@ impl HotkeyBackend for HyprlandHotkeys {
             return Ok(());
         }
 
-        let bind_value = build_bind_value(hotkey, id, &self.fifo_path);
-        let stdout = super::run_hyprctl(&["keyword", "bind", &bind_value])?;
-        super::expect_ok(&format!("bind {bind_value}"), &stdout)?;
-
-        self.binds.insert(
-            id,
-            BindSpec {
-                unbind_value: build_unbind_value(hotkey),
-            },
-        );
+        let spec = BindSpec {
+            bind_value: build_bind_value(hotkey, id, &self.fifo_path),
+            unbind_value: build_unbind_value(hotkey),
+        };
+        if !self.suspended {
+            bind(&spec)?;
+        }
+        self.binds.insert(id, spec);
         Ok(())
     }
 
@@ -90,12 +102,35 @@ impl HotkeyBackend for HyprlandHotkeys {
         let Some(spec) = self.binds.remove(&id) else {
             return Ok(());
         };
-        let stdout = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value])?;
-        super::expect_ok(&format!("unbind {}", spec.unbind_value), &stdout)
+        if self.suspended {
+            return Ok(());
+        }
+        unbind(&spec)
     }
 
     fn set_handler(&mut self, handler: HotkeyHandler) {
         *self.handler.lock().unwrap() = Some(handler);
+    }
+
+    /// Hyprland consumes a bound combination before any client sees it, so a
+    /// suspend must really remove the binds; gating dispatch would not let the
+    /// capture widget observe the keys.
+    fn set_suspended(&mut self, suspended: bool) -> Result<(), PlatformError> {
+        if self.suspended == suspended {
+            return Ok(());
+        }
+        self.suspended = suspended;
+
+        let mut first_error = None;
+        for spec in self.binds.values() {
+            let result = if suspended { unbind(spec) } else { bind(spec) };
+            // Keep going on failure so binds do not end up half-toggled;
+            // report the first error afterwards.
+            if let Err(err) = result {
+                first_error.get_or_insert(err);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -103,8 +138,10 @@ impl Drop for HyprlandHotkeys {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
 
-        for spec in self.binds.values() {
-            let _ = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value]);
+        if !self.suspended {
+            for spec in self.binds.values() {
+                let _ = unbind(spec);
+            }
         }
 
         // Unblock the reader thread: a non-blocking write open fails with

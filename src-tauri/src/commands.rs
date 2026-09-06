@@ -4,6 +4,7 @@ use dofustabs_platform::HotkeyId;
 
 use crate::hotkey_dispatch::drain_and_activate;
 use crate::settings_io;
+use crate::watcher;
 use crate::state::{HotkeyView, InstanceView, PlatformHandles, SettingsView, SharedState};
 
 fn emit_instances(app: &AppHandle, views: &[InstanceView]) {
@@ -36,11 +37,12 @@ fn register_hotkey(
     }
 }
 
+/// Forces a discovery scan right now (the watcher also scans every second)
+/// and answers with the resulting snapshot.
 #[tauri::command]
-pub fn refresh(state: State<'_, SharedState>) -> Vec<InstanceView> {
-    // The watcher owns discovery and pushes changes every second; refresh
-    // just answers with the current snapshot.
-    state.0.lock().unwrap().to_views()
+pub fn refresh(app: AppHandle, state: State<'_, SharedState>) -> Result<Vec<InstanceView>, String> {
+    watcher::scan_now(&app).map_err(|e| e.to_string())?;
+    Ok(state.0.lock().unwrap().to_views())
 }
 
 #[tauri::command]
@@ -94,30 +96,46 @@ pub fn reorder(
     state: State<'_, SharedState>,
     pids: Vec<u32>,
 ) -> Result<Vec<InstanceView>, String> {
-    {
-        let mut s = state.0.lock().unwrap();
-        let known: Vec<u32> = s.instances.iter().map(|i| i.pid).collect();
-        // Listed pids take positions 0..n in the given order; unlisted ones
-        // keep their relative order after them.
-        let mut next = pids.len() as i32;
-        for pid in &known {
-            if !pids.contains(pid) {
-                if let Some(i) = s.instances.iter_mut().find(|i| i.pid == *pid) {
-                    i.display_order = next;
-                    next += 1;
-                }
-            }
-        }
-        for (index, pid) in pids.iter().enumerate() {
-            if let Some(i) = s.instances.iter_mut().find(|i| i.pid == *pid) {
-                i.display_order = index as i32;
-            }
-        }
-    }
+    state.0.lock().unwrap().apply_order(&pids);
 
     let views = persist_and_views(&state);
     emit_instances(&app, &views);
     Ok(views)
+}
+
+fn move_instance(
+    app: &AppHandle,
+    state: &State<'_, SharedState>,
+    pid: u32,
+    delta: i32,
+) -> Result<Vec<InstanceView>, String> {
+    let moved = state.0.lock().unwrap().move_instance(pid, delta);
+    if !moved {
+        // Already at the edge of its group: nothing to persist or announce.
+        return Ok(state.0.lock().unwrap().to_views());
+    }
+
+    let views = persist_and_views(state);
+    emit_instances(app, &views);
+    Ok(views)
+}
+
+#[tauri::command]
+pub fn move_up(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    pid: u32,
+) -> Result<Vec<InstanceView>, String> {
+    move_instance(&app, &state, pid, -1)
+}
+
+#[tauri::command]
+pub fn move_down(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    pid: u32,
+) -> Result<Vec<InstanceView>, String> {
+    move_instance(&app, &state, pid, 1)
 }
 
 #[tauri::command]
@@ -202,6 +220,21 @@ pub fn set_instance_hotkey(
     let views = persist_and_views(&state);
     emit_instances(&app, &views);
     Ok(())
+}
+
+/// Releases (or restores) every OS-level hotkey while the UI captures a new
+/// combination, so the pressed keys reach the capture widget instead of
+/// triggering a switch. Degraded mode has nothing to suspend.
+#[tauri::command]
+pub fn set_hotkeys_suspended(
+    handles: State<'_, PlatformHandles>,
+    suspended: bool,
+) -> Result<(), String> {
+    let mut guard = handles.hotkeys.lock().unwrap();
+    match guard.as_mut() {
+        Some(backend) => backend.set_suspended(suspended).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
