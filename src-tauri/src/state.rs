@@ -1,0 +1,462 @@
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use dofustabs_core::instance::parse_title;
+use dofustabs_core::rotation::ActivationQueue;
+use dofustabs_core::settings::{AppSettings, Hotkey, InstanceSettings};
+use dofustabs_platform::{DiscoveredWindow, HotkeyBackend, WindowActivator, WindowRef};
+use serde::{Deserialize, Serialize};
+
+/// One tracked game client with its parsed identity and per-instance options.
+pub struct TrackedInstance {
+    pub pid: u32,
+    pub title: String,
+    pub character_name: String,
+    pub class_name: Option<&'static str>,
+    pub icon_file: Option<&'static str>,
+    pub window_ref: WindowRef,
+    pub enabled: bool,
+    pub display_order: i32,
+    pub hotkey: Option<Hotkey>,
+}
+
+impl TrackedInstance {
+    pub fn from_discovered(win: &DiscoveredWindow) -> Self {
+        let parsed = parse_title(&win.title);
+        Self {
+            pid: win.pid,
+            title: win.title.clone(),
+            character_name: parsed.character_name,
+            class_name: parsed.class.map(|c| c.canonical_name),
+            icon_file: parsed.class.map(|c| c.icon_file),
+            window_ref: win.window_ref.clone(),
+            enabled: true,
+            display_order: 0,
+            hotkey: None,
+        }
+    }
+
+    /// Stable identity used for the "primary character" setting: the parsed
+    /// character name when available, otherwise the raw window title.
+    pub fn primary_identity(&self) -> &str {
+        if self.character_name.trim().is_empty() {
+            &self.title
+        } else {
+            &self.character_name
+        }
+    }
+}
+
+pub struct AppState {
+    pub instances: Vec<TrackedInstance>,
+    pub active_pid: Option<u32>,
+    pub settings: AppSettings,
+    pub queue: ActivationQueue,
+    pub settings_path: PathBuf,
+}
+
+pub struct SharedState(pub Mutex<AppState>);
+
+/// Platform handles live outside the state mutex; lock order is always
+/// state first, then platform, never the reverse.
+#[derive(Default)]
+pub struct PlatformHandles {
+    pub activator: Mutex<Option<Box<dyn WindowActivator + Send>>>,
+    pub hotkeys: Mutex<Option<Box<dyn HotkeyBackend + Send>>>,
+}
+
+impl AppState {
+    pub fn new(settings: AppSettings, settings_path: PathBuf) -> Self {
+        Self {
+            instances: Vec::new(),
+            active_pid: None,
+            settings,
+            queue: ActivationQueue::new(),
+            settings_path,
+        }
+    }
+
+    pub fn enabled_ordered_pids(&self) -> Vec<u32> {
+        let mut enabled: Vec<&TrackedInstance> =
+            self.instances.iter().filter(|i| i.enabled).collect();
+        enabled.sort_by_key(|i| i.display_order);
+        enabled.iter().map(|i| i.pid).collect()
+    }
+
+    pub fn to_views(&self) -> Vec<InstanceView> {
+        let mut views: Vec<InstanceView> = self
+            .instances
+            .iter()
+            .map(|i| InstanceView {
+                pid: i.pid,
+                character_name: i.character_name.clone(),
+                class_name: i.class_name.map(str::to_string),
+                icon_file: i.icon_file.map(str::to_string),
+                enabled: i.enabled,
+                display_order: i.display_order,
+                hotkey: i.hotkey.as_ref().map(HotkeyView::from_core),
+                is_primary: self.is_primary(i),
+                is_active: self.active_pid == Some(i.pid),
+            })
+            .collect();
+        views.sort_by_key(|v| v.display_order);
+        views
+    }
+
+    pub fn settings_view(&self) -> SettingsView {
+        SettingsView {
+            next_hotkey: HotkeyView::from_core(&self.settings.next_hotkey),
+            previous_hotkey: HotkeyView::from_core(&self.settings.previous_hotkey),
+            primary_hotkey: HotkeyView::from_core(&self.settings.primary_hotkey),
+            show_names: self.settings.show_sidebar_names,
+        }
+    }
+
+    fn is_primary(&self, instance: &TrackedInstance) -> bool {
+        let primary = self.settings.primary_character_name.trim();
+        !primary.is_empty() && primary == instance.primary_identity()
+    }
+
+    pub fn primary_pid(&self) -> Option<u32> {
+        self.instances
+            .iter()
+            .find(|i| i.enabled && self.is_primary(i))
+            .map(|i| i.pid)
+    }
+
+    /// Snapshots the live instance list into the persisted settings shape.
+    pub fn snapshot_settings(&mut self) -> &AppSettings {
+        self.settings.instances = self
+            .instances
+            .iter()
+            .map(|i| InstanceSettings {
+                process_id: i.pid,
+                title: i.title.clone(),
+                enabled: i.enabled,
+                display_order: i.display_order,
+                individual_hotkey: i.hotkey.clone(),
+            })
+            .collect();
+        &self.settings
+    }
+}
+
+/// Result of reconciling the tracked list against a fresh discovery scan.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub appeared: Vec<u32>,
+    pub disappeared: Vec<u32>,
+    pub changed: bool,
+}
+
+/// Reconciles `instances` with `discovered`, preserving enabled/order/hotkey
+/// for surviving pids and seeding new instances from `persisted` (matched by
+/// exact title first, then by parsed character name). New unmatched instances
+/// go to the end of the display order.
+pub fn sync_instances(
+    instances: &mut Vec<TrackedInstance>,
+    discovered: &[DiscoveredWindow],
+    persisted: &[InstanceSettings],
+) -> SyncOutcome {
+    let mut outcome = SyncOutcome::default();
+
+    let alive: Vec<u32> = discovered.iter().map(|d| d.pid).collect();
+    let before = instances.len();
+    instances.retain(|i| {
+        let keep = alive.contains(&i.pid);
+        if !keep {
+            outcome.disappeared.push(i.pid);
+        }
+        keep
+    });
+    outcome.changed |= instances.len() != before;
+
+    for win in discovered {
+        match instances.iter_mut().find(|i| i.pid == win.pid) {
+            Some(existing) => {
+                if existing.title != win.title {
+                    let parsed = parse_title(&win.title);
+                    existing.title = win.title.clone();
+                    existing.character_name = parsed.character_name;
+                    existing.class_name = parsed.class.map(|c| c.canonical_name);
+                    existing.icon_file = parsed.class.map(|c| c.icon_file);
+                    outcome.changed = true;
+                }
+            }
+            None => {
+                let mut instance = TrackedInstance::from_discovered(win);
+                let matched = persisted
+                    .iter()
+                    .find(|p| !p.title.trim().is_empty() && p.title == instance.title)
+                    .or_else(|| {
+                        let name = instance.character_name.trim();
+                        if name.is_empty() {
+                            return None;
+                        }
+                        persisted
+                            .iter()
+                            .find(|p| parse_title(&p.title).character_name == name)
+                    });
+
+                match matched {
+                    Some(p) => {
+                        instance.enabled = p.enabled;
+                        instance.display_order = p.display_order;
+                        instance.hotkey = p.individual_hotkey.clone();
+                    }
+                    None => {
+                        instance.display_order = instances
+                            .iter()
+                            .map(|i| i.display_order)
+                            .max()
+                            .map_or(0, |m| m + 1);
+                    }
+                }
+
+                outcome.appeared.push(instance.pid);
+                outcome.changed = true;
+                instances.push(instance);
+            }
+        }
+    }
+
+    outcome
+}
+
+// ── Wire types (camelCase per the fixed IPC contract) ────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyView {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub super_key: bool,
+    pub key: String,
+}
+
+impl HotkeyView {
+    pub fn from_core(hotkey: &Hotkey) -> Self {
+        Self {
+            ctrl: hotkey.ctrl,
+            alt: hotkey.alt,
+            shift: hotkey.shift,
+            super_key: hotkey.super_key,
+            key: hotkey.key.clone(),
+        }
+    }
+
+    pub fn into_core(self) -> Hotkey {
+        Hotkey {
+            ctrl: self.ctrl,
+            alt: self.alt,
+            shift: self.shift,
+            super_key: self.super_key,
+            key: self.key,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceView {
+    pub pid: u32,
+    pub character_name: String,
+    pub class_name: Option<String>,
+    pub icon_file: Option<String>,
+    pub enabled: bool,
+    pub display_order: i32,
+    pub hotkey: Option<HotkeyView>,
+    pub is_primary: bool,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub next_hotkey: HotkeyView,
+    pub previous_hotkey: HotkeyView,
+    pub primary_hotkey: HotkeyView,
+    pub show_names: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn discovered(pid: u32, title: &str) -> DiscoveredWindow {
+        DiscoveredWindow {
+            pid,
+            title: title.to_string(),
+            process_name: "Dofus.x64".to_string(),
+            window_ref: WindowRef::WaylandAddress(format!("0x{pid:x}")),
+        }
+    }
+
+    fn state_with(instances: Vec<TrackedInstance>) -> AppState {
+        let mut state = AppState::new(AppSettings::default(), PathBuf::from("/tmp/unused.json"));
+        state.instances = instances;
+        state
+    }
+
+    #[test]
+    fn sync_adopts_new_instances_at_end_of_order() {
+        let mut instances = Vec::new();
+        let outcome = sync_instances(
+            &mut instances,
+            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[],
+        );
+
+        assert!(outcome.changed);
+        assert_eq!(outcome.appeared, vec![10, 20]);
+        assert_eq!(instances[0].display_order, 0);
+        assert_eq!(instances[1].display_order, 1);
+        assert_eq!(instances[0].character_name, "Ana");
+        assert_eq!(instances[0].class_name, Some("Feca"));
+    }
+
+    #[test]
+    fn sync_preserves_survivor_options_and_drops_dead_pids() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[],
+        );
+        instances[0].enabled = false;
+        instances[0].display_order = 7;
+        instances[0].hotkey = Some(Hotkey::alt("1"));
+
+        let outcome = sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &[]);
+
+        assert!(outcome.changed);
+        assert_eq!(outcome.disappeared, vec![20]);
+        assert_eq!(instances.len(), 1);
+        assert!(!instances[0].enabled);
+        assert_eq!(instances[0].display_order, 7);
+        assert_eq!(instances[0].hotkey, Some(Hotkey::alt("1")));
+    }
+
+    #[test]
+    fn sync_matches_persisted_settings_by_exact_title() {
+        let persisted = vec![InstanceSettings {
+            process_id: 999, // stale pid: matching is by title, never by pid
+            title: "Ana - Feca - Dofus".to_string(),
+            enabled: false,
+            display_order: 3,
+            individual_hotkey: Some(Hotkey::alt("2")),
+        }];
+
+        let mut instances = Vec::new();
+        sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &persisted);
+
+        assert!(!instances[0].enabled);
+        assert_eq!(instances[0].display_order, 3);
+        assert_eq!(instances[0].hotkey, Some(Hotkey::alt("2")));
+    }
+
+    #[test]
+    fn sync_falls_back_to_character_name_when_title_changed() {
+        let persisted = vec![InstanceSettings {
+            process_id: 999,
+            title: "Ana - Feca - Dofus 2.71".to_string(),
+            enabled: false,
+            display_order: 5,
+            individual_hotkey: None,
+        }];
+
+        let mut instances = Vec::new();
+        sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus 3.0")], &persisted);
+
+        assert!(!instances[0].enabled);
+        assert_eq!(instances[0].display_order, 5);
+    }
+
+    #[test]
+    fn sync_reparses_identity_when_title_changes_in_place() {
+        let mut instances = Vec::new();
+        sync_instances(&mut instances, &[discovered(10, "Connecting - Dofus")], &[]);
+
+        let outcome = sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &[]);
+
+        assert!(outcome.changed);
+        assert!(outcome.appeared.is_empty());
+        assert_eq!(instances[0].character_name, "Ana");
+        assert_eq!(instances[0].class_name, Some("Feca"));
+    }
+
+    #[test]
+    fn unchanged_scan_reports_no_change() {
+        let mut instances = Vec::new();
+        sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &[]);
+
+        let outcome = sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &[]);
+
+        assert_eq!(outcome, SyncOutcome::default());
+    }
+
+    #[test]
+    fn views_are_sorted_by_display_order_and_flag_active_and_primary() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[],
+        );
+        instances[0].display_order = 1;
+        instances[1].display_order = 0;
+
+        let mut state = state_with(instances);
+        state.active_pid = Some(10);
+        state.settings.primary_character_name = "Beto".to_string();
+
+        let views = state.to_views();
+        assert_eq!(views[0].pid, 20);
+        assert!(views[0].is_primary);
+        assert!(!views[0].is_active);
+        assert_eq!(views[1].pid, 10);
+        assert!(views[1].is_active);
+        assert_eq!(views[1].icon_file.as_deref(), Some("Feca.png"));
+    }
+
+    #[test]
+    fn wire_shapes_are_camel_case() {
+        let view = InstanceView {
+            pid: 1,
+            character_name: "Ana".to_string(),
+            class_name: None,
+            icon_file: None,
+            enabled: true,
+            display_order: 0,
+            hotkey: Some(HotkeyView::from_core(&Hotkey::new(false, false, false, true, "F1"))),
+            is_primary: false,
+            is_active: true,
+        };
+
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(json.get("characterName").is_some());
+        assert!(json.get("isActive").is_some());
+        assert!(json["hotkey"].get("superKey").is_some());
+    }
+
+    #[test]
+    fn enabled_pids_follow_display_order() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+                discovered(30, "Caro - Xelor - Dofus"),
+            ],
+            &[],
+        );
+        instances[0].display_order = 2;
+        instances[2].display_order = 0;
+        instances[1].enabled = false;
+
+        let state = state_with(instances);
+        assert_eq!(state.enabled_ordered_pids(), vec![30, 10]);
+    }
+}
