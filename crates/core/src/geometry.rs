@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+/// Width in logical pixels of the switcher column drawn on the left edge of
+/// the app window. Game windows are stacked to its right, so it must match
+/// `--sidebar-width` in `src/styles.css`.
+pub const SIDEBAR_WIDTH: i32 = 64;
+
 /// Axis-aligned rectangle in logical screen pixels (origin top-left).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -22,6 +27,26 @@ impl Rect {
 
     pub fn is_empty(&self) -> bool {
         self.width <= 0 || self.height <= 0
+    }
+
+    /// Removes a column of `px` logical pixels from the left edge. The width
+    /// never goes below zero.
+    pub fn inset_left(self, px: i32) -> Self {
+        let px = px.max(0);
+        Self {
+            x: self.x + px,
+            width: (self.width - px).max(0),
+            ..self
+        }
+    }
+
+    /// Keeps only a column of `px` logical pixels on the left edge, clamped
+    /// to the rect's own width. Position and height are unchanged.
+    pub fn left_column(self, px: i32) -> Self {
+        Self {
+            width: px.clamp(0, self.width),
+            ..self
+        }
     }
 
     /// Usable area of a monitor: the physical size is divided by the output
@@ -70,6 +95,38 @@ mod tests {
         let area = Rect::usable_area(0, 0, 100, 100, 0.0, [80, 80, 80, 80]);
         assert_eq!(area, Rect::new(80, 80, 0, 0));
         assert!(area.is_empty());
+    }
+
+    #[test]
+    fn inset_left_shifts_x_and_shrinks_width() {
+        assert_eq!(
+            Rect::new(0, 40, 1920, 1040).inset_left(88),
+            Rect::new(88, 40, 1832, 1040)
+        );
+        assert_eq!(
+            Rect::new(10, 0, 50, 50).inset_left(80),
+            Rect::new(90, 0, 0, 50)
+        );
+        assert_eq!(
+            Rect::new(10, 0, 50, 50).inset_left(-5),
+            Rect::new(10, 0, 50, 50)
+        );
+    }
+
+    #[test]
+    fn left_column_clamps_width_to_the_requested_px() {
+        assert_eq!(
+            Rect::new(0, 40, 1920, 1040).left_column(64),
+            Rect::new(0, 40, 64, 1040)
+        );
+        assert_eq!(
+            Rect::new(0, 40, 50, 1040).left_column(64),
+            Rect::new(0, 40, 50, 1040)
+        );
+        assert_eq!(
+            Rect::new(0, 40, 1920, 1040).left_column(-5),
+            Rect::new(0, 40, 0, 1040)
+        );
     }
 
     #[test]

@@ -111,6 +111,30 @@ pub trait WindowManager {
     /// Workspace id the app's own window currently lives on and the usable
     /// area of that workspace's monitor.
     fn own_workspace_and_area(&self) -> Result<(String, Rect), PlatformError>;
+    /// Name of the monitor the app's own window currently lives on.
+    fn own_monitor_name(&self) -> Result<String, PlatformError>;
+    /// Reserves `px` logical pixels on the left edge of `monitor` for
+    /// floating-only use; `0` releases the reservation. Tiled windows and
+    /// groups avoid the reserved area.
+    fn set_left_reserved(&self, monitor: &str, px: i32) -> Result<(), PlatformError>;
+    /// Whether the compositor currently draws a tab bar on grouped windows.
+    fn group_bar_visible(&self) -> Result<bool, PlatformError>;
+    /// Shows or hides the compositor's tab bar on grouped windows. The
+    /// switcher column replaces it, and the bar would steal vertical space
+    /// from the game; the previous value is restored on release.
+    fn set_group_bar_visible(&self, visible: bool) -> Result<(), PlatformError>;
+    /// Un-floats `win`, moves it to `workspace` without following it, and
+    /// makes it a member of the game group: with `anchor = None` it becomes
+    /// the group (idempotent — does nothing if already grouped); with
+    /// `Some(anchor)` it is added to the anchor's group (idempotent — does
+    /// nothing if already a member of that group, moving it over if it
+    /// belongs to a different one).
+    fn group_window(
+        &self,
+        win: &WindowRef,
+        workspace: &str,
+        anchor: Option<&WindowRef>,
+    ) -> Result<(), PlatformError>;
 }
 
 /// Callback invoked (from a backend-owned thread) when a hotkey fires.

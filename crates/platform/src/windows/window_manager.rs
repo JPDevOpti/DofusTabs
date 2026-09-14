@@ -24,4 +24,31 @@ impl WindowManager for WindowsWindowManager {
     fn own_workspace_and_area(&self) -> Result<(String, Rect), PlatformError> {
         Err(PlatformError::Unsupported("workspace lookup".to_string()))
     }
+
+    fn own_monitor_name(&self) -> Result<String, PlatformError> {
+        Err(PlatformError::Unsupported("monitor lookup".to_string()))
+    }
+
+    fn set_left_reserved(&self, _: &str, _: i32) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported(
+            "reserved area".to_string(),
+        ))
+    }
+
+    fn group_bar_visible(&self) -> Result<bool, PlatformError> {
+        Err(PlatformError::Unsupported("group bar".to_string()))
+    }
+
+    fn set_group_bar_visible(&self, _: bool) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported("group bar".to_string()))
+    }
+
+    fn group_window(
+        &self,
+        _: &WindowRef,
+        _: &str,
+        _: Option<&WindowRef>,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported("window grouping".to_string()))
+    }
 }

@@ -1,10 +1,14 @@
 use tauri::{AppHandle, Emitter, State};
 
+use dofustabs_core::geometry::SIDEBAR_WIDTH;
 use dofustabs_platform::HotkeyId;
 
 use crate::hotkey_dispatch::drain_and_activate;
 use crate::settings_io;
-use crate::state::{HotkeyView, InstanceView, PlatformHandles, SettingsView, SharedState};
+use crate::state::{
+    AppState, HotkeyView, InstanceView, LayoutConstantsView, PlatformHandles, SettingsView,
+    SharedState,
+};
 use crate::watcher;
 use crate::window_layout;
 
@@ -14,13 +18,49 @@ fn emit_instances(app: &AppHandle, views: &[InstanceView]) {
     }
 }
 
-/// Persists the current state and returns the refreshed views.
+/// Persists the current state and returns the refreshed views. Shared by
+/// every command that just changed the persisted settings shape.
 fn persist_and_views(state: &State<'_, SharedState>) -> Vec<InstanceView> {
-    let mut s = state.0.lock().unwrap();
+    let mut s = state.lock();
     let path = s.settings_path.clone();
     let settings = s.snapshot_settings().clone();
     settings_io::save_logged(&path, &settings);
     s.to_views()
+}
+
+/// Persists and emits without a preceding mutation; used when the mutation
+/// already happened under its own lock (e.g. after a conditional check).
+fn persist_and_emit(app: &AppHandle, state: &State<'_, SharedState>) -> Vec<InstanceView> {
+    let views = persist_and_views(state);
+    emit_instances(app, &views);
+    views
+}
+
+/// Locks state, runs `f`, persists, then emits `instances-changed` with the
+/// refreshed views. This is the shared shape behind most mutating commands:
+/// lock -> mutate -> persist -> emit.
+fn mutate_and_emit<R>(
+    app: &AppHandle,
+    state: &State<'_, SharedState>,
+    f: impl FnOnce(&mut AppState) -> R,
+) -> (R, Vec<InstanceView>) {
+    let result = {
+        let mut s = state.lock();
+        f(&mut s)
+    };
+    let views = persist_and_views(state);
+    emit_instances(app, &views);
+    (result, views)
+}
+
+/// Same shape as [`mutate_and_emit`] but for settings-only commands that
+/// don't need the mutation's return value threaded back to the caller.
+fn mutate_settings_and_emit(
+    app: &AppHandle,
+    state: &State<'_, SharedState>,
+    f: impl FnOnce(&mut AppState),
+) -> Vec<InstanceView> {
+    mutate_and_emit(app, state, f).1
 }
 
 fn register_hotkey(
@@ -43,12 +83,12 @@ fn register_hotkey(
 #[tauri::command]
 pub fn refresh(app: AppHandle, state: State<'_, SharedState>) -> Result<Vec<InstanceView>, String> {
     watcher::scan_now(&app).map_err(|e| e.to_string())?;
-    Ok(state.0.lock().unwrap().to_views())
+    Ok(state.lock().to_views())
 }
 
 #[tauri::command]
 pub fn activate(app: AppHandle, state: State<'_, SharedState>, pid: u32) -> Result<(), String> {
-    state.0.lock().unwrap().queue.push_activation(pid);
+    state.lock().queue.push_activation(pid);
     drain_and_activate(&app);
     Ok(())
 }
@@ -61,10 +101,15 @@ pub fn set_enabled(
     pid: u32,
     enabled: bool,
 ) -> Result<Vec<InstanceView>, String> {
-    let (hotkey, was_active) = {
-        let mut s = state.0.lock().unwrap();
+    if !state.lock().instances.iter().any(|i| i.pid == pid) {
+        return Err(format!("unknown pid {pid}"));
+    }
+    // The instance may still disappear between the check above and the
+    // mutation below (the watcher runs on its own thread); treat that as a
+    // benign no-op rather than a hard error.
+    let ((hotkey, was_active), views) = mutate_and_emit(&app, &state, |s| {
         let Some(instance) = s.instances.iter_mut().find(|i| i.pid == pid) else {
-            return Err(format!("unknown pid {pid}"));
+            return (None, false);
         };
         instance.enabled = enabled;
         let hotkey = instance.hotkey.clone();
@@ -73,7 +118,7 @@ pub fn set_enabled(
             s.active_pid = None;
         }
         (hotkey, was_active)
-    };
+    });
 
     if enabled {
         register_hotkey(&handles, HotkeyId::Instance(pid), hotkey.as_ref())?;
@@ -86,8 +131,6 @@ pub fn set_enabled(
         }
     }
 
-    let views = persist_and_views(&state);
-    emit_instances(&app, &views);
     Ok(views)
 }
 
@@ -97,11 +140,9 @@ pub fn reorder(
     state: State<'_, SharedState>,
     pids: Vec<u32>,
 ) -> Result<Vec<InstanceView>, String> {
-    state.0.lock().unwrap().apply_order(&pids);
-
-    let views = persist_and_views(&state);
-    emit_instances(&app, &views);
-    Ok(views)
+    Ok(mutate_settings_and_emit(&app, &state, |s| {
+        s.apply_order(&pids)
+    }))
 }
 
 fn move_instance(
@@ -110,15 +151,12 @@ fn move_instance(
     pid: u32,
     delta: i32,
 ) -> Result<Vec<InstanceView>, String> {
-    let moved = state.0.lock().unwrap().move_instance(pid, delta);
+    let moved = state.lock().move_instance(pid, delta);
     if !moved {
         // Already at the edge of its group: nothing to persist or announce.
-        return Ok(state.0.lock().unwrap().to_views());
+        return Ok(state.lock().to_views());
     }
-
-    let views = persist_and_views(state);
-    emit_instances(app, &views);
-    Ok(views)
+    Ok(persist_and_emit(app, state))
 }
 
 #[tauri::command]
@@ -145,27 +183,34 @@ pub fn set_primary(
     state: State<'_, SharedState>,
     pid: u32,
 ) -> Result<Vec<InstanceView>, String> {
-    {
-        let mut s = state.0.lock().unwrap();
-        let Some(identity) = s
+    if !state.lock().instances.iter().any(|i| i.pid == pid) {
+        return Err(format!("unknown pid {pid}"));
+    }
+    let (_, views) = mutate_and_emit(&app, &state, |s| {
+        if let Some(identity) = s
             .instances
             .iter()
             .find(|i| i.pid == pid)
             .map(|i| i.primary_identity().to_string())
-        else {
-            return Err(format!("unknown pid {pid}"));
-        };
-        s.settings.primary_character_name = identity;
-    }
-
-    let views = persist_and_views(&state);
-    emit_instances(&app, &views);
+        {
+            s.settings.primary_character_name = identity;
+        }
+    });
     Ok(views)
 }
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, SharedState>) -> SettingsView {
-    state.0.lock().unwrap().settings_view()
+    state.lock().settings_view()
+}
+
+/// Layout facts the frontend needs but must not hardcode, sourced from the
+/// same constant the platform layer uses to place windows.
+#[tauri::command]
+pub fn layout_constants() -> LayoutConstantsView {
+    LayoutConstantsView {
+        sidebar_width: SIDEBAR_WIDTH as u32,
+    }
 }
 
 #[tauri::command]
@@ -178,7 +223,7 @@ pub fn set_global_hotkey(
     let hotkey = hotkey.map(HotkeyView::into_core).unwrap_or_default();
 
     let id = {
-        let mut s = state.0.lock().unwrap();
+        let mut s = state.lock();
         let (slot_ref, id) = match slot.as_str() {
             "next" => (&mut s.settings.next_hotkey, HotkeyId::Next),
             "previous" => (&mut s.settings.previous_hotkey, HotkeyId::Previous),
@@ -207,21 +252,21 @@ pub fn set_instance_hotkey(
         .map(HotkeyView::into_core)
         .filter(|hk| !hk.is_empty());
 
-    let enabled = {
-        let mut s = state.0.lock().unwrap();
+    if !state.lock().instances.iter().any(|i| i.pid == pid) {
+        return Err(format!("unknown pid {pid}"));
+    }
+    let (enabled, _views) = mutate_and_emit(&app, &state, |s| {
         let Some(instance) = s.instances.iter_mut().find(|i| i.pid == pid) else {
-            return Err(format!("unknown pid {pid}"));
+            return false;
         };
         instance.hotkey = hotkey.clone();
         instance.enabled
-    };
+    });
 
     if enabled {
         register_hotkey(&handles, HotkeyId::Instance(pid), hotkey.as_ref())?;
     }
 
-    let views = persist_and_views(&state);
-    emit_instances(&app, &views);
     Ok(())
 }
 
@@ -249,7 +294,7 @@ pub fn set_manage_game_windows(
     state: State<'_, SharedState>,
     manage: bool,
 ) -> Result<(), String> {
-    state.0.lock().unwrap().settings.manage_game_windows = manage;
+    state.lock().settings.manage_game_windows = manage;
     persist_and_views(&state);
     if manage {
         window_layout::arrange_all(&app);
@@ -265,6 +310,15 @@ pub fn arrange_windows(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Widens the switcher column to fit an overlay (settings panel, account
+/// popover) rendered to its right. `extra` is the width in logical pixels
+/// the overlay needs beyond the column; 0 collapses it back.
+#[tauri::command]
+pub fn set_sidebar_extension(app: AppHandle, extra: u32) -> Result<(), String> {
+    window_layout::set_own_width(&app, SIDEBAR_WIDTH + extra as i32);
+    Ok(())
+}
+
 /// Sets the launcher path used by [`launch_game`]; blank clears the
 /// override so the default location applies again.
 #[tauri::command]
@@ -272,9 +326,9 @@ pub fn set_launcher_path(
     state: State<'_, SharedState>,
     path: Option<String>,
 ) -> Result<SettingsView, String> {
-    state.0.lock().unwrap().set_launcher_path(path);
+    state.lock().set_launcher_path(path);
     persist_and_views(&state);
-    Ok(state.0.lock().unwrap().settings_view())
+    Ok(state.lock().settings_view())
 }
 
 /// Starts the game launcher detached from this app, on the dedicated GPU
@@ -285,7 +339,7 @@ pub fn launch_game(
     state: State<'_, SharedState>,
     handles: State<'_, PlatformHandles>,
 ) -> Result<(), String> {
-    let path = state.0.lock().unwrap().launcher_path();
+    let path = state.lock().launcher_path();
     let guard = handles.launcher.lock().unwrap();
     let Some(launcher) = guard.as_ref() else {
         return Err("platform backend unavailable: cannot launch the game".to_string());
@@ -299,8 +353,8 @@ pub fn set_show_names(
     state: State<'_, SharedState>,
     show: bool,
 ) -> Result<(), String> {
-    state.0.lock().unwrap().settings.show_sidebar_names = show;
-    let views = persist_and_views(&state);
-    emit_instances(&app, &views);
+    mutate_settings_and_emit(&app, &state, |s| {
+        s.settings.show_sidebar_names = show;
+    });
     Ok(())
 }

@@ -47,21 +47,43 @@ struct BindSpec {
 /// binds must go through `hyprctl eval` with the `hl` API instead. Try Lua
 /// first and fall back to the keyword form for older compositors.
 fn bind(spec: &BindSpec) -> Result<(), PlatformError> {
-    match super::run_hyprctl(&["eval", &spec.lua_bind]) {
+    let lua_err = match super::run_hyprctl(&["eval", &spec.lua_bind]) {
         Ok(stdout) if stdout.trim() == "ok" => return Ok(()),
-        _ => {}
-    }
-    let stdout = super::run_hyprctl(&["keyword", "bind", &spec.bind_value])?;
-    super::expect_ok(&format!("bind {}", spec.bind_value), &stdout)
+        Ok(stdout) => format!("eval {}: {}", spec.lua_bind, stdout.trim()),
+        Err(err) => err.to_string(),
+    };
+    let stdout = super::run_hyprctl(&["keyword", "bind", &spec.bind_value]).map_err(|err| {
+        PlatformError::CommandFailed(format!(
+            "bind {} failed on both paths: lua eval: {lua_err}; legacy keyword: {err}",
+            spec.bind_value
+        ))
+    })?;
+    super::expect_ok(&format!("bind {}", spec.bind_value), &stdout).map_err(|err| {
+        PlatformError::CommandFailed(format!(
+            "bind {} failed on both paths: lua eval: {lua_err}; legacy keyword: {err}",
+            spec.bind_value
+        ))
+    })
 }
 
 fn unbind(spec: &BindSpec) -> Result<(), PlatformError> {
-    match super::run_hyprctl(&["eval", &spec.lua_unbind]) {
+    let lua_err = match super::run_hyprctl(&["eval", &spec.lua_unbind]) {
         Ok(stdout) if stdout.trim() == "ok" => return Ok(()),
-        _ => {}
-    }
-    let stdout = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value])?;
-    super::expect_ok(&format!("unbind {}", spec.unbind_value), &stdout)
+        Ok(stdout) => format!("eval {}: {}", spec.lua_unbind, stdout.trim()),
+        Err(err) => err.to_string(),
+    };
+    let stdout = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value]).map_err(|err| {
+        PlatformError::CommandFailed(format!(
+            "unbind {} failed on both paths: lua eval: {lua_err}; legacy keyword: {err}",
+            spec.unbind_value
+        ))
+    })?;
+    super::expect_ok(&format!("unbind {}", spec.unbind_value), &stdout).map_err(|err| {
+        PlatformError::CommandFailed(format!(
+            "unbind {} failed on both paths: lua eval: {lua_err}; legacy keyword: {err}",
+            spec.unbind_value
+        ))
+    })
 }
 
 impl HyprlandHotkeys {
@@ -241,16 +263,16 @@ fn lua_combo(hotkey: &Hotkey) -> String {
 fn build_lua_bind(hotkey: &Hotkey, id: HotkeyId, fifo: &Path) -> String {
     // Binds stack in Hyprland, so drop any previous bind on the same combo
     // first (including leftovers from an instance that died without cleanup).
-    let combo = lua_combo(hotkey);
+    let combo = super::lua_string(&lua_combo(hotkey));
+    let wire_name = super::lua_string(&id.wire_name());
+    let fifo_path = super::lua_string(&fifo.display().to_string());
     format!(
-        "pcall(hl.unbind, \"{combo}\"); hl.bind(\"{combo}\", hl.dsp.exec_cmd(\"sh -c 'echo {} > {}'\"))",
-        id.wire_name(),
-        fifo.display()
+        "pcall(hl.unbind, \"{combo}\"); hl.bind(\"{combo}\", hl.dsp.exec_cmd(\"sh -c 'echo {wire_name} > {fifo_path}'\"))"
     )
 }
 
 fn build_lua_unbind(hotkey: &Hotkey) -> String {
-    format!("hl.unbind(\"{}\")", lua_combo(hotkey))
+    format!("hl.unbind(\"{}\")", super::lua_string(&lua_combo(hotkey)))
 }
 
 fn hypr_mods(hotkey: &Hotkey) -> String {

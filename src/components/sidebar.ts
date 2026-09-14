@@ -1,6 +1,7 @@
-import type { GlobalHotkeySlot, HotkeyView, InstanceView, SettingsView } from "../ipc";
 import { iconUrlFor } from "../class-icons";
-import { createAccountItem, type AccountItemHandlers } from "./account-item";
+import type { GlobalHotkeySlot, HotkeyView, InstanceView, SettingsView } from "../ipc";
+import { type AccountItem, type AccountItemHandlers, createAccountItem } from "./account-item";
+import { createHotkeyCapture } from "./hotkey-capture";
 import { createSettingsPanel } from "./settings-panel";
 
 export interface SidebarState {
@@ -24,134 +25,172 @@ export interface SidebarHandlers {
   onArrangeWindows(): void;
   onLauncherPathChange(path: string | null): void;
   onLaunchGame(): void;
+  onSetSidebarExtension(extra: number): void;
 }
 
 export interface Sidebar {
   update(state: SidebarState): void;
 }
 
+function sidebarWidthPx(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width");
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : 64;
+}
+
+// Measures how far past the sidebar column an overlay actually extends,
+// instead of hardcoding its width (which used to drift from styles.css).
+function measureExtension(el: HTMLElement): number {
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0) return 0;
+  return Math.max(0, Math.ceil(rect.right - sidebarWidthPx() + 8));
+}
+
 export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sidebar {
   let currentState: SidebarState = { instances: [], showNames: false, settings: null };
   let draggedPid: number | null = null;
+  let openPopoverPid: number | null = null;
 
   root.replaceChildren();
   root.className = "sidebar";
 
-  // Top bar
-  const topbar = document.createElement("header");
-  topbar.className = "topbar";
+  // Accounts list
+  const list = document.createElement("div");
+  list.className = "accounts";
 
-  const brand = document.createElement("div");
-  brand.className = "brand";
-  const brandTitle = document.createElement("span");
-  brandTitle.className = "brand-title";
-  brandTitle.textContent = "DofusTabs";
-  const counter = document.createElement("span");
-  counter.className = "counter";
-  counter.title = "Cuentas habilitadas / detectadas";
-  brand.append(brandTitle, counter);
-
-  const actions = document.createElement("div");
-  actions.className = "topbar-actions";
-  const launchButton = document.createElement("button");
-  launchButton.type = "button";
-  launchButton.className = "icon-btn launch";
-  launchButton.title = "Abrir el launcher de Dofus (GPU dedicada)";
-  launchButton.textContent = "▶";
-  launchButton.addEventListener("click", () => handlers.onLaunchGame());
-  const refreshButton = document.createElement("button");
-  refreshButton.type = "button";
-  refreshButton.className = "icon-btn";
-  refreshButton.title = "Refrescar";
-  refreshButton.textContent = "↻";
-  refreshButton.addEventListener("click", () => handlers.onRefresh());
+  // Settings toggle, pinned at the bottom of the column
   const settingsButton = document.createElement("button");
   settingsButton.type = "button";
-  settingsButton.className = "icon-btn";
-  settingsButton.title = "Atajos globales";
-  settingsButton.textContent = "⚙";
-  actions.append(launchButton, refreshButton, settingsButton);
+  settingsButton.className = "icon-btn settings-toggle";
+  settingsButton.title = "Ajustes";
+  settingsButton.setAttribute("aria-label", "Abrir ajustes");
+  settingsButton.textContent = "⚙︎";
 
-  topbar.append(brand, actions);
-
-  // Collapsible global hotkeys panel
+  // Settings overlay panel, anchored to the right of the column
   const settingsPanel = createSettingsPanel({
+    onLaunchGame: handlers.onLaunchGame,
+    onRefresh: handlers.onRefresh,
+    onToggleShowNames: handlers.onToggleShowNames,
     onGlobalHotkeyChange: handlers.onGlobalHotkeyChange,
     onToggleManageGameWindows: handlers.onToggleManageGameWindows,
     onArrangeWindows: handlers.onArrangeWindows,
     onLauncherPathChange: handlers.onLauncherPathChange,
+    onClose: () => {
+      settingsPanel.close();
+      syncSidebarExtension();
+    },
   });
-  settingsButton.addEventListener("click", () => settingsPanel.toggle());
 
-  // Show-names toggle
-  const showNamesLabel = document.createElement("label");
-  showNamesLabel.className = "show-names";
-  const showNamesInput = document.createElement("input");
-  showNamesInput.type = "checkbox";
-  showNamesInput.addEventListener("change", () => handlers.onToggleShowNames(showNamesInput.checked));
-  showNamesLabel.append(showNamesInput, document.createTextNode("Mostrar nombres"));
+  // Widens the own window while the settings panel or the account popover
+  // extends past the sidebar column, and shrinks it back once both are
+  // closed. Measured from the live elements instead of duplicating the CSS
+  // widths here.
+  const syncSidebarExtension = () => {
+    const extra = Math.max(
+      settingsPanel.isOpen() ? measureExtension(settingsPanel.element) : 0,
+      popover.classList.contains("hidden") ? 0 : measureExtension(popover),
+    );
+    handlers.onSetSidebarExtension(extra);
+  };
 
-  // Accounts list + empty state
-  const list = document.createElement("main");
-  list.className = "accounts";
-  const empty = document.createElement("div");
-  empty.className = "empty-state hidden";
-  empty.textContent = "Abre clientes de Dofus para verlos aquí";
+  settingsButton.addEventListener("click", () => {
+    closePopover();
+    settingsPanel.toggle();
+    syncSidebarExtension();
+  });
 
-  root.append(topbar, settingsPanel.element, showNamesLabel, list);
+  const divider = document.createElement("div");
+  divider.className = "sidebar-divider";
 
-  // Context menu (attached to body so it can overflow the list)
-  const menu = document.createElement("div");
-  menu.className = "context-menu hidden";
-  document.body.appendChild(menu);
-  const closeMenu = () => menu.classList.add("hidden");
-  document.addEventListener("click", closeMenu);
+  root.append(list, divider, settingsButton, settingsPanel.element);
+
+  // Per-account controls popover, anchored to the right of the column at the
+  // tile's vertical offset. Attached to body so it can overflow the column.
+  const popover = document.createElement("div");
+  popover.className = "account-popover hidden";
+  document.body.appendChild(popover);
+  const closePopover = () => {
+    popover.classList.add("hidden");
+    openPopoverPid = null;
+    syncSidebarExtension();
+  };
+
+  document.addEventListener("click", (event) => {
+    if (!popover.classList.contains("hidden") && !popover.contains(event.target as Node)) {
+      closePopover();
+    }
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeMenu();
+    if (event.key === "Escape") {
+      closePopover();
+      settingsPanel.close();
+      syncSidebarExtension();
+    }
   });
-  window.addEventListener("blur", closeMenu);
+  window.addEventListener("blur", closePopover);
 
-  const menuItem = (label: string, action: () => void, enabled = true): HTMLElement => {
+  const popoverAction = (label: string, action: () => void, enabled = true): HTMLElement => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "context-menu-item";
+    button.className = "popover-item";
     button.textContent = label;
     button.disabled = !enabled;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      closeMenu();
+      closePopover();
       action();
     });
     return button;
   };
 
-  const openMenu = (pid: number, x: number, y: number) => {
-    const instance = currentState.instances.find((i) => i.pid === pid);
-    if (!instance) return;
-
+  const renderPopoverContents = (instance: InstanceView, ordered: InstanceView[]) => {
     // Moves stay inside the account's own enabled/disabled group.
-    const group = orderedInstances().filter((i) => i.enabled === instance.enabled);
-    const position = group.findIndex((i) => i.pid === pid);
+    const group = ordered.filter((i) => i.enabled === instance.enabled);
+    const position = group.findIndex((i) => i.pid === instance.pid);
     const canMoveUp = position > 0;
     const canMoveDown = position >= 0 && position < group.length - 1;
 
-    menu.replaceChildren(
-      menuItem("Subir", () => handlers.onMoveUp(pid), canMoveUp),
-      menuItem("Bajar", () => handlers.onMoveDown(pid), canMoveDown),
-      menuItem(instance.enabled ? "Deshabilitar cuenta" : "Habilitar cuenta", () =>
-        handlers.onSetEnabled(pid, !instance.enabled),
+    const hotkeyRow = document.createElement("div");
+    hotkeyRow.className = "popover-row";
+    const hotkeyLabel = document.createElement("span");
+    hotkeyLabel.textContent = "Atajo";
+    hotkeyRow.appendChild(hotkeyLabel);
+    const popoverHotkeyCapture = createHotkeyCapture({
+      initial: instance.hotkey,
+      placeholder: "Sin atajo",
+      compact: true,
+      ariaLabel: "Asignar atajo de esta cuenta",
+      onChange: (hotkey) => handlers.onInstanceHotkeyChange(instance.pid, hotkey),
+    });
+    hotkeyRow.appendChild(popoverHotkeyCapture.element);
+
+    popover.replaceChildren(
+      popoverAction("Subir", () => handlers.onMoveUp(instance.pid), canMoveUp),
+      popoverAction("Bajar", () => handlers.onMoveDown(instance.pid), canMoveDown),
+      popoverAction(instance.enabled ? "Deshabilitar cuenta" : "Habilitar cuenta", () =>
+        handlers.onSetEnabled(instance.pid, !instance.enabled),
       ),
-      menuItem(
+      popoverAction(
         instance.isPrimary ? "Ya es el personaje principal" : "Volver principal a este",
-        () => handlers.onSetPrimary(pid),
+        () => handlers.onSetPrimary(instance.pid),
         !instance.isPrimary,
       ),
+      hotkeyRow,
     );
+  };
 
-    menu.classList.remove("hidden");
-    const rect = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+  const openPopover = (pid: number, anchorTop: number) => {
+    const instance = currentState.instances.find((i) => i.pid === pid);
+    if (!instance) return;
+    settingsPanel.close();
+    openPopoverPid = pid;
+
+    renderPopoverContents(instance, orderedInstances());
+
+    popover.classList.remove("hidden");
+    const maxTop = window.innerHeight - popover.offsetHeight - 8;
+    popover.style.top = `${Math.max(8, Math.min(anchorTop, maxTop))}px`;
+    syncSidebarExtension();
   };
 
   // Same order the backend uses for its views: enabled first, then by
@@ -161,9 +200,9 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
       (a, b) => Number(!a.enabled) - Number(!b.enabled) || a.displayOrder - b.displayOrder,
     );
 
-  const handleDrop = (targetPid: number) => {
+  const handleDrop = (targetPid: number, ordered: InstanceView[]) => {
     if (draggedPid === null || draggedPid === targetPid) return;
-    const pids = orderedInstances().map((i) => i.pid);
+    const pids = ordered.map((i) => i.pid);
     const from = pids.indexOf(draggedPid);
     const to = pids.indexOf(targetPid);
     if (from < 0 || to < 0) return;
@@ -174,42 +213,70 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
 
   const itemHandlers: AccountItemHandlers = {
     onActivate: handlers.onActivate,
-    onContextMenu: openMenu,
+    onOpenPopover: openPopover,
     onDragStart: (pid) => {
       draggedPid = pid;
     },
     onDragEnd: () => {
       draggedPid = null;
     },
-    onDropOn: handleDrop,
-    onHotkeyChange: handlers.onInstanceHotkeyChange,
+    onDropOn: (pid) => handleDrop(pid, orderedInstances()),
   };
+
+  const items = new Map<number, AccountItem>();
 
   const render = () => {
     const ordered = orderedInstances();
-    const enabledCount = ordered.filter((i) => i.enabled).length;
-    counter.textContent = `${enabledCount}/${ordered.length}`;
-    showNamesInput.checked = currentState.showNames;
+    const seen = new Set<number>();
 
-    list.replaceChildren();
-    if (ordered.length === 0) {
-      empty.classList.remove("hidden");
-      list.appendChild(empty);
-    } else {
-      empty.classList.add("hidden");
-      for (const instance of ordered) {
-        list.appendChild(
-          createAccountItem(
-            instance,
-            currentState.showNames,
-            iconUrlFor(instance.iconFile),
-            itemHandlers,
-          ),
+    let previousElement: HTMLElement | null = null;
+    for (const instance of ordered) {
+      seen.add(instance.pid);
+      let item = items.get(instance.pid);
+      if (!item) {
+        item = createAccountItem(
+          instance,
+          currentState.showNames,
+          iconUrlFor(instance.iconFile),
+          itemHandlers,
         );
+        items.set(instance.pid, item);
+      } else {
+        item.update(instance, currentState.showNames, iconUrlFor(instance.iconFile));
+      }
+
+      // Reorder only when the element isn't already right after the
+      // previous one, so unaffected nodes (and their transitions) are left
+      // alone.
+      const expectedNext: Element | null = previousElement
+        ? previousElement.nextElementSibling
+        : list.firstElementChild;
+      if (expectedNext !== item.element) {
+        const insertBeforeNode = previousElement ? previousElement.nextSibling : list.firstChild;
+        list.insertBefore(item.element, insertBeforeNode);
+      }
+      previousElement = item.element;
+    }
+
+    for (const [pid, item] of items) {
+      if (!seen.has(pid)) {
+        item.element.remove();
+        items.delete(pid);
       }
     }
 
-    if (currentState.settings) settingsPanel.update(currentState.settings);
+    settingsPanel.update(currentState.settings, currentState.showNames);
+
+    // Keep the open popover in sync (canMoveUp/canMoveDown, hotkey, enabled
+    // state) instead of letting it go stale until closed.
+    if (openPopoverPid !== null) {
+      const instance = currentState.instances.find((i) => i.pid === openPopoverPid);
+      if (!instance) {
+        closePopover();
+      } else {
+        renderPopoverContents(instance, ordered);
+      }
+    }
   };
 
   return {

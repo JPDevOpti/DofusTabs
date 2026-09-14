@@ -1,26 +1,32 @@
-import type { GpuKind, HotkeyView, InstanceView } from "../ipc";
-import { createHotkeyCapture } from "./hotkey-capture";
+import type { GpuKind, InstanceView } from "../ipc";
 
 export interface AccountItemHandlers {
   onActivate(pid: number): void;
-  onContextMenu(pid: number, x: number, y: number): void;
+  onOpenPopover(pid: number, anchorTop: number): void;
   onDragStart(pid: number): void;
   onDragEnd(): void;
   onDropOn(pid: number): void;
-  onHotkeyChange(pid: number, hotkey: HotkeyView | null): void;
 }
 
-const GPU_BADGES: Record<Exclude<GpuKind, "unknown">, { label: string; title: string }> = {
-  dedicated: { label: "dGPU", title: "Renderiza en la tarjeta gráfica dedicada" },
-  integrated: { label: "iGPU", title: "Renderiza en la gráfica integrada" },
+export interface AccountItem {
+  element: HTMLElement;
+  update(instance: InstanceView, showNames: boolean, iconUrl: string | null): void;
+}
+
+const GPU_TITLES: Record<Exclude<GpuKind, "unknown">, string> = {
+  dedicated: "Renderiza en la tarjeta gráfica dedicada",
+  integrated: "Renderiza en la gráfica integrada",
 };
 
+// A coloured dot on the tile corner; the meaning lives in the tooltip and
+// the accessible name.
 function createGpuBadge(gpu: GpuKind): HTMLElement | null {
   if (gpu === "unknown") return null;
   const badge = document.createElement("span");
   badge.className = `gpu-badge ${gpu}`;
-  badge.textContent = GPU_BADGES[gpu].label;
-  badge.title = GPU_BADGES[gpu].title;
+  badge.title = GPU_TITLES[gpu];
+  badge.setAttribute("role", "img");
+  badge.setAttribute("aria-label", GPU_TITLES[gpu]);
   return badge;
 }
 
@@ -29,84 +35,53 @@ export function createAccountItem(
   showNames: boolean,
   iconUrl: string | null,
   handlers: AccountItemHandlers,
-): HTMLElement {
+): AccountItem {
+  let currentPid = instance.pid;
+
   const item = document.createElement("div");
   item.className = "account-item";
-  item.classList.toggle("active", instance.isActive);
-  item.classList.toggle("disabled", !instance.enabled);
   item.draggable = true;
-  if (!showNames) {
-    item.title = instance.className
-      ? `${instance.characterName} · ${instance.className}`
-      : instance.characterName;
-  }
+
+  const tile = document.createElement("div");
+  tile.className = "account-tile";
 
   const icon = document.createElement("div");
   icon.className = "account-icon";
-  if (iconUrl) {
-    const img = document.createElement("img");
-    img.src = iconUrl;
-    img.alt = instance.className ?? "";
-    img.draggable = false;
-    icon.appendChild(img);
-  } else {
-    icon.classList.add("fallback");
-    icon.textContent = (instance.characterName.trim()[0] ?? "?").toUpperCase();
-  }
-  item.appendChild(icon);
+  tile.appendChild(icon);
 
-  const body = document.createElement("div");
-  body.className = "account-body";
-  if (showNames) {
-    const name = document.createElement("span");
-    name.className = "account-name";
-    name.textContent = instance.characterName || "(sin nombre)";
-    body.appendChild(name);
+  let gpuBadge: HTMLElement | null = null;
+  let star: HTMLElement | null = null;
 
-    if (instance.className) {
-      const cls = document.createElement("span");
-      cls.className = "account-class";
-      cls.textContent = instance.className;
-      body.appendChild(cls);
-    }
-  }
-  item.appendChild(body);
-
-  const gpuBadge = createGpuBadge(instance.gpu);
-  if (gpuBadge) item.appendChild(gpuBadge);
-
-  if (instance.isPrimary) {
-    const star = document.createElement("span");
-    star.className = "primary-star";
-    star.textContent = "★";
-    star.title = "Personaje principal";
-    item.appendChild(star);
-  }
-
-  const badge = createHotkeyCapture({
-    initial: instance.hotkey,
-    placeholder: "Atajo",
-    compact: true,
-    onChange: (hotkey) => handlers.onHotkeyChange(instance.pid, hotkey),
+  const moreButton = document.createElement("button");
+  moreButton.type = "button";
+  moreButton.className = "account-more";
+  moreButton.title = "Más opciones";
+  moreButton.setAttribute("aria-label", "Más opciones de la cuenta");
+  moreButton.textContent = "⋯";
+  moreButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    handlers.onOpenPopover(currentPid, tile.getBoundingClientRect().top);
   });
-  badge.classList.add("account-hotkey");
-  item.appendChild(badge);
+  tile.appendChild(moreButton);
+
+  item.appendChild(tile);
+
+  let name: HTMLElement | null = null;
 
   item.addEventListener("click", (event) => {
-    if ((event.target as HTMLElement).closest(".hotkey-capture")) return;
-    if (!instance.enabled) return;
-    handlers.onActivate(instance.pid);
+    if ((event.target as HTMLElement).closest(".account-more")) return;
+    if (!item.classList.contains("disabled")) handlers.onActivate(currentPid);
   });
 
   item.addEventListener("contextmenu", (event) => {
     event.preventDefault();
-    handlers.onContextMenu(instance.pid, event.clientX, event.clientY);
+    handlers.onOpenPopover(currentPid, tile.getBoundingClientRect().top);
   });
 
   item.addEventListener("dragstart", (event) => {
-    event.dataTransfer?.setData("text/plain", String(instance.pid));
+    event.dataTransfer?.setData("text/plain", String(currentPid));
     item.classList.add("dragging");
-    handlers.onDragStart(instance.pid);
+    handlers.onDragStart(currentPid);
   });
   item.addEventListener("dragend", () => {
     item.classList.remove("dragging");
@@ -120,8 +95,77 @@ export function createAccountItem(
   item.addEventListener("drop", (event) => {
     event.preventDefault();
     item.classList.remove("drop-target");
-    handlers.onDropOn(instance.pid);
+    handlers.onDropOn(currentPid);
   });
 
-  return item;
+  const update = (
+    nextInstance: InstanceView,
+    nextShowNames: boolean,
+    nextIconUrl: string | null,
+  ) => {
+    currentPid = nextInstance.pid;
+
+    item.classList.toggle("active", nextInstance.isActive);
+    item.classList.toggle("disabled", !nextInstance.enabled);
+    item.classList.toggle("has-name", nextShowNames);
+    item.title = nextInstance.className
+      ? `${nextInstance.characterName} · ${nextInstance.className}`
+      : nextInstance.characterName;
+
+    icon.replaceChildren();
+    if (nextIconUrl) {
+      icon.classList.remove("fallback");
+      const img = document.createElement("img");
+      img.src = nextIconUrl;
+      img.alt = nextInstance.className ?? "";
+      img.draggable = false;
+      icon.appendChild(img);
+    } else {
+      icon.classList.add("fallback");
+      icon.textContent = (nextInstance.characterName.trim()[0] ?? "?").toUpperCase();
+    }
+
+    if (nextInstance.gpu !== "unknown") {
+      if (!gpuBadge) {
+        gpuBadge = createGpuBadge(nextInstance.gpu);
+        if (gpuBadge) tile.insertBefore(gpuBadge, moreButton);
+      } else {
+        gpuBadge.className = `gpu-badge ${nextInstance.gpu}`;
+        gpuBadge.title = GPU_TITLES[nextInstance.gpu];
+        gpuBadge.setAttribute("aria-label", GPU_TITLES[nextInstance.gpu]);
+      }
+    } else if (gpuBadge) {
+      gpuBadge.remove();
+      gpuBadge = null;
+    }
+
+    if (nextInstance.isPrimary) {
+      if (!star) {
+        star = document.createElement("span");
+        star.className = "primary-star";
+        star.textContent = "★";
+        star.title = "Personaje principal";
+        tile.insertBefore(star, moreButton);
+      }
+    } else if (star) {
+      star.remove();
+      star = null;
+    }
+
+    if (nextShowNames) {
+      if (!name) {
+        name = document.createElement("span");
+        name.className = "account-name";
+        item.appendChild(name);
+      }
+      name.textContent = nextInstance.characterName || "(sin nombre)";
+    } else if (name) {
+      name.remove();
+      name = null;
+    }
+  };
+
+  update(instance, showNames, iconUrl);
+
+  return { element: item, update };
 }

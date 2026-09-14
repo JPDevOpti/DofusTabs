@@ -44,7 +44,7 @@ Requisitos: Rust estable, Node 20+, y en Linux `webkit2gtk-4.1`.
 
 ```sh
 npm install
-npm run tauri dev      # desarrollo
+./run.sh               # desarrollo con recarga en caliente (equivale a npm run tauri dev)
 npm run tauri build    # binario de release
 cargo test --workspace # suite completa de Rust
 npm run build          # verificación del frontend
@@ -59,7 +59,9 @@ En Linux los atajos se registran como binds de Hyprland mientras la app corre y 
 
 ## Ventanas y GPU (Linux/Hyprland)
 
-- Con "Gestionar ventanas del juego" activo, cada cliente nuevo se vuelve flotante y se apila en el workspace donde estaba DofusTabs al arrancar, ocupando el área útil del monitor; la sidebar queda siempre por encima. "Reorganizar ventanas" re-aplica el layout a todas.
+- La ventana de DofusTabs no tiene decoraciones y al arrancar se vuelve flotante y se convierte en una columna de 64 px a toda la altura del área útil del monitor donde abrió; los juegos se apilan a su derecha; mientras el panel de ajustes o el menú de una cuenta están abiertos la ventana se ensancha temporalmente para mostrarlos.
+- Con "Gestionar ventanas del juego" activo, cada cliente nuevo se une a un grupo nativo de Hyprland (pestañas del compositor) en el workspace donde estaba DofusTabs al arrancar; la app reserva una columna de 64 px en ese monitor para que el grupo nunca tape la sidebar y la libera al salir; activar una cuenta (atajo o clic) muestra su pestaña. Recomendación: usar un workspace vacío para los juegos, porque el grupo comparte el espacio con las demás ventanas tileadas del workspace. "Reorganizar ventanas" re-aplica el layout a todas.
+- No se usa el fullscreen del compositor a propósito: con `misc:on_focus_under_fullscreen = 1` (valor por defecto en Omarchy) Hyprland lo quitaría cada vez que un cliente del juego recibe el foco.
 - Cada cuenta muestra un badge `dGPU` (NVIDIA) o `iGPU` (integrada) según los nodos DRM que el proceso tiene abiertos. Sin badge = todavía no renderiza.
 - El botón ▶ abre el Ankama Launcher con las variables PRIME (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, ...) para que el juego use la dedicada. La ruta por defecto es `~/Applications/Dofus.AppImage`, configurable en ajustes.
 

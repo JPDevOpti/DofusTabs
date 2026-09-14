@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use dofustabs_core::gpu::GpuKind;
 use dofustabs_platform::{DiscoveredWindow, HotkeyId, PlatformError, WindowRef};
 
-use crate::state::{sync_instances, PlatformHandles, SharedState};
+use crate::state::{sync_instances, AppState, PlatformHandles, SharedState};
 use crate::window_layout;
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
@@ -20,6 +20,13 @@ pub fn start(app: AppHandle) {
         .spawn(move || {
             let mut scan_failed = false;
             loop {
+                // The own window maps shortly after setup, and again after
+                // being hidden to the tray (it gets a new address once
+                // re-shown); keep trying to float and stretch it whenever
+                // it is not currently known.
+                if !window_layout::is_prepared(&app) {
+                    window_layout::ensure_prepared(&app);
+                }
                 match scan_now(&app) {
                     Ok(()) => scan_failed = false,
                     Err(err) => {
@@ -75,12 +82,73 @@ fn inspect_gpus(app: &AppHandle, pids: &[u32]) -> Vec<(u32, GpuKind)> {
         .collect()
 }
 
+/// Pure decision logic for what a changed scan should do: which pids need
+/// their active-hotkey (de)registered, which need stacking, and whether the
+/// active pid must be cleared. Kept free of any platform/state types so it
+/// can be tested with plain inputs.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ScanEffects {
+    /// True when the previously active pid died in this scan.
+    active_pid_cleared: bool,
+    /// Pids that appeared this scan and should have their hotkey registered.
+    to_register: Vec<(u32, dofustabs_core::settings::Hotkey)>,
+    /// Pids to stack, when window management is enabled.
+    to_stack: Vec<u32>,
+}
+
+/// One instance's facts relevant to [`plan_scan_effects`].
+struct InstanceFacts {
+    pid: u32,
+    enabled: bool,
+    hotkey: Option<dofustabs_core::settings::Hotkey>,
+}
+
+fn plan_scan_effects(
+    outcome: &crate::state::SyncOutcome,
+    active_pid: Option<u32>,
+    instances: &[InstanceFacts],
+    manage_game_windows: bool,
+) -> ScanEffects {
+    let active_pid_cleared = active_pid.is_some_and(|pid| outcome.disappeared.contains(&pid));
+
+    let to_register: Vec<(u32, dofustabs_core::settings::Hotkey)> = instances
+        .iter()
+        .filter(|i| outcome.appeared.contains(&i.pid) && i.enabled)
+        .filter_map(|i| i.hotkey.clone().map(|hk| (i.pid, hk)))
+        .collect();
+
+    let to_stack: Vec<u32> = if manage_game_windows {
+        instances
+            .iter()
+            .filter(|i| outcome.appeared.contains(&i.pid))
+            .map(|i| i.pid)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    ScanEffects {
+        active_pid_cleared,
+        to_register,
+        to_stack,
+    }
+}
+
 fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
     let state = app.state::<SharedState>();
     let (outcome, unresolved) = {
-        let mut s = state.0.lock().unwrap();
-        let persisted = s.settings.instances.clone();
-        let outcome = sync_instances(&mut s.instances, windows, &persisted);
+        let mut s = state.lock();
+        // `sync_instances` only reads `persisted` to seed brand-new
+        // instances; borrowing it instead of cloning avoids a full
+        // Vec<InstanceSettings> copy on every tick (this runs once a
+        // second). The split-borrow is safe because `sync_instances`
+        // takes `instances` and `persisted` as two disjoint parameters.
+        let AppState {
+            instances,
+            settings,
+            ..
+        } = &mut *s;
+        let outcome = sync_instances(instances, windows, &settings.instances);
         (outcome, s.pids_with_unknown_gpu())
     };
 
@@ -88,7 +156,11 @@ fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
     // respect the lock order (state, then platform — never nested).
     let resolved = inspect_gpus(app, &unresolved);
 
-    let mut s = state.0.lock().unwrap();
+    // The pids gathered above (`outcome`, `unresolved`) were matched under
+    // the fresh lock just taken here; a pid that disappeared in between is
+    // simply absent from `s.instances` now and every lookup below no-ops for
+    // it, so this two-lock window is harmless (TOCTOU without a hazard).
+    let mut s = state.lock();
     let mut changed = outcome.changed;
     for (pid, gpu) in resolved {
         if s.set_gpu(pid, gpu) {
@@ -100,30 +172,36 @@ fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
         return;
     }
 
-    let active_died = s
-        .active_pid
-        .is_some_and(|pid| outcome.disappeared.contains(&pid));
-    if active_died {
+    let facts: Vec<InstanceFacts> = s
+        .instances
+        .iter()
+        .map(|i| InstanceFacts {
+            pid: i.pid,
+            enabled: i.enabled,
+            hotkey: i.hotkey.clone(),
+        })
+        .collect();
+    let effects = plan_scan_effects(
+        &outcome,
+        s.active_pid,
+        &facts,
+        s.settings.manage_game_windows,
+    );
+    if effects.active_pid_cleared {
         s.active_pid = None;
     }
 
-    // Collect hotkey (de)registrations while holding state, apply after.
-    let to_register: Vec<(u32, dofustabs_core::settings::Hotkey)> = s
+    let views = s.to_views();
+    let window_ref_of: std::collections::HashMap<u32, WindowRef> = s
         .instances
         .iter()
-        .filter(|i| outcome.appeared.contains(&i.pid) && i.enabled)
-        .filter_map(|i| i.hotkey.clone().map(|hk| (i.pid, hk)))
+        .map(|i| (i.pid, i.window_ref.clone()))
         .collect();
-    let views = s.to_views();
-    let to_stack: Vec<WindowRef> = if s.settings.manage_game_windows {
-        s.instances
-            .iter()
-            .filter(|i| outcome.appeared.contains(&i.pid))
-            .map(|i| i.window_ref.clone())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let to_stack: Vec<WindowRef> = effects
+        .to_stack
+        .iter()
+        .filter_map(|pid| window_ref_of.get(pid).cloned())
+        .collect();
     drop(s);
 
     // New game windows are stacked once; later manual moves are respected.
@@ -139,7 +217,7 @@ fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
                 log::warn!("failed to unregister hotkey for pid {pid}: {err}");
             }
         }
-        for (pid, hotkey) in &to_register {
+        for (pid, hotkey) in &effects.to_register {
             if let Err(err) = backend.register(HotkeyId::Instance(*pid), hotkey) {
                 log::warn!("failed to register hotkey for pid {pid}: {err}");
             }
@@ -150,9 +228,71 @@ fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
     if let Err(err) = app.emit("instances-changed", views) {
         log::warn!("failed to emit instances-changed: {err}");
     }
-    if active_died {
+    if effects.active_pid_cleared {
         if let Err(err) = app.emit("active-changed", Option::<u32>::None) {
             log::warn!("failed to emit active-changed: {err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dofustabs_core::settings::Hotkey;
+
+    fn facts(pid: u32, enabled: bool, hotkey: Option<Hotkey>) -> InstanceFacts {
+        InstanceFacts {
+            pid,
+            enabled,
+            hotkey,
+        }
+    }
+
+    #[test]
+    fn appeared_enabled_instances_with_a_hotkey_are_registered() {
+        let outcome = crate::state::SyncOutcome {
+            appeared: vec![10, 20],
+            disappeared: vec![],
+            changed: true,
+        };
+        let instances = vec![
+            facts(10, true, Some(Hotkey::alt("1"))),
+            facts(20, false, Some(Hotkey::alt("2"))), // disabled: not registered
+            facts(30, true, Some(Hotkey::alt("3"))),  // not appeared: not registered
+        ];
+
+        let effects = plan_scan_effects(&outcome, None, &instances, false);
+
+        assert_eq!(effects.to_register, vec![(10, Hotkey::alt("1"))]);
+        assert!(!effects.active_pid_cleared);
+        assert!(effects.to_stack.is_empty());
+    }
+
+    #[test]
+    fn active_pid_is_cleared_only_when_it_disappeared() {
+        let outcome = crate::state::SyncOutcome {
+            appeared: vec![],
+            disappeared: vec![10],
+            changed: true,
+        };
+        assert!(plan_scan_effects(&outcome, Some(10), &[], false).active_pid_cleared);
+        assert!(!plan_scan_effects(&outcome, Some(20), &[], false).active_pid_cleared);
+        assert!(!plan_scan_effects(&outcome, None, &[], false).active_pid_cleared);
+    }
+
+    #[test]
+    fn appeared_pids_are_stacked_only_when_management_is_enabled() {
+        let outcome = crate::state::SyncOutcome {
+            appeared: vec![10, 20],
+            disappeared: vec![],
+            changed: true,
+        };
+        let instances = vec![facts(10, true, None), facts(20, false, None)];
+
+        let disabled = plan_scan_effects(&outcome, None, &instances, false);
+        assert!(disabled.to_stack.is_empty());
+
+        let enabled = plan_scan_effects(&outcome, None, &instances, true);
+        assert_eq!(enabled.to_stack, vec![10, 20]);
     }
 }

@@ -1,8 +1,10 @@
 mod commands;
 mod hotkey_dispatch;
+mod instances;
 mod settings_io;
 mod state;
 mod tray;
+mod views;
 mod watcher;
 mod window_layout;
 
@@ -51,8 +53,10 @@ pub fn run() {
             commands::set_hotkeys_suspended,
             commands::set_manage_game_windows,
             commands::arrange_windows,
+            commands::set_sidebar_extension,
             commands::set_launcher_path,
             commands::launch_game,
+            commands::layout_constants,
         ])
         .setup(|app| {
             let settings_path = match app.path().app_config_dir() {
@@ -94,7 +98,7 @@ pub fn run() {
 
                     {
                         let state = app.state::<SharedState>();
-                        let s = state.0.lock().unwrap();
+                        let s = state.lock();
                         for (id, hotkey) in [
                             (HotkeyId::Next, &s.settings.next_hotkey),
                             (HotkeyId::Previous, &s.settings.previous_hotkey),
@@ -136,6 +140,12 @@ pub fn run() {
                 api.prevent_close();
                 if let Err(err) = window.hide() {
                     log::warn!("failed to hide main window: {err}");
+                } else {
+                    // The window unmaps while hidden and gets a new address
+                    // once re-shown from the tray; release the reserved
+                    // column and forget the stale own-window reference so
+                    // the watcher re-prepares it from scratch.
+                    window_layout::suspend(window.app_handle());
                 }
             }
         })
@@ -143,6 +153,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // Release the reserved sidebar column before the hotkey
+                // backend teardown below, so the monitor is back to its full
+                // width even if cleanup gets interrupted after this point.
+                window_layout::release(app_handle);
                 // Tauri terminates via process::exit, which skips Drop for
                 // managed state — release the hotkey backend explicitly so
                 // its Hyprland binds and FIFO get cleaned up.

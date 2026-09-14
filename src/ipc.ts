@@ -37,6 +37,10 @@ export interface SettingsView {
 
 export type GlobalHotkeySlot = "next" | "previous" | "primary";
 
+export interface LayoutConstants {
+  sidebarWidth: number;
+}
+
 export const ipc = {
   refresh: (): Promise<InstanceView[]> => invoke("refresh"),
 
@@ -71,10 +75,14 @@ export const ipc = {
 
   arrangeWindows: (): Promise<void> => invoke("arrange_windows"),
 
+  setSidebarExtension: (extra: number): Promise<void> => invoke("set_sidebar_extension", { extra }),
+
   setLauncherPath: (path: string | null): Promise<SettingsView> =>
     invoke("set_launcher_path", { path }),
 
   launchGame: (): Promise<void> => invoke("launch_game"),
+
+  layoutConstants: (): Promise<LayoutConstants> => invoke("layout_constants"),
 };
 
 export function onInstancesChanged(

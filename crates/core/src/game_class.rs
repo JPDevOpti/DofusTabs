@@ -18,16 +18,18 @@ impl PartialEq for GameClass {
 impl Eq for GameClass {}
 
 /// Every alias must already be in normalized form (lowercase, no accents).
+/// Each class lists its Spanish name first, then the French/English names
+/// used by clients running in those languages.
 pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Aniripsa",
         icon_file: "Aniripsa.png",
-        aliases: &["aniripsa"],
+        aliases: &["aniripsa", "eniripsa"],
     },
     GameClass {
         canonical_name: "Anutrof",
         icon_file: "Anutrof.png",
-        aliases: &["anutrof"],
+        aliases: &["anutrof", "enutrof"],
     },
     GameClass {
         canonical_name: "Feca",
@@ -37,17 +39,17 @@ pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Forjalanza",
         icon_file: "Forjalanza.png",
-        aliases: &["forjalanza"],
+        aliases: &["forjalanza", "forgelance"],
     },
     GameClass {
         canonical_name: "Hipermago",
         icon_file: "Hipermago.png",
-        aliases: &["hipermago"],
+        aliases: &["hipermago", "huppermage"],
     },
     GameClass {
         canonical_name: "Ocra",
         icon_file: "Ocra.png",
-        aliases: &["ocra"],
+        aliases: &["ocra", "cra"],
     },
     GameClass {
         canonical_name: "Osamodas",
@@ -62,7 +64,7 @@ pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Sacrógrito",
         icon_file: "Sacrogrito.png",
-        aliases: &["sacrogrito"],
+        aliases: &["sacrogrito", "sacrieur", "sacrier"],
     },
     GameClass {
         canonical_name: "Sadida",
@@ -72,7 +74,7 @@ pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Selotrop",
         icon_file: "Selotrop.png",
-        aliases: &["selotrop"],
+        aliases: &["selotrop", "eliotrope"],
     },
     GameClass {
         canonical_name: "Sram",
@@ -82,17 +84,17 @@ pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Steamer",
         icon_file: "Steamer.png",
-        aliases: &["steamer"],
+        aliases: &["steamer", "foggernaut"],
     },
     GameClass {
         canonical_name: "Tymador",
         icon_file: "Tymador.png",
-        aliases: &["tymador"],
+        aliases: &["tymador", "roublard", "rogue"],
     },
     GameClass {
         canonical_name: "Uginak",
         icon_file: "Uginak.png",
-        aliases: &["uginak"],
+        aliases: &["uginak", "ouginak"],
     },
     GameClass {
         canonical_name: "Xelor",
@@ -102,17 +104,17 @@ pub static ALL: &[GameClass] = &[
     GameClass {
         canonical_name: "Yopuka",
         icon_file: "Yopuka.png",
-        aliases: &["yopuka"],
+        aliases: &["yopuka", "iop"],
     },
     GameClass {
         canonical_name: "Zobal",
         icon_file: "Zobal.png",
-        aliases: &["zobal"],
+        aliases: &["zobal", "masqueraider"],
     },
     GameClass {
         canonical_name: "Zurcar",
         icon_file: "Zurcar.png",
-        aliases: &["zurcar"],
+        aliases: &["zurcar", "zurcarak", "ecaflip"],
     },
 ];
 
@@ -172,6 +174,35 @@ mod tests {
                 .canonical_name,
             "Feca"
         );
+    }
+
+    #[test]
+    fn resolves_french_and_english_names_to_the_spanish_class() {
+        for (foreign, canonical) in [
+            ("Eniripsa", "Aniripsa"),
+            ("Enutrof", "Anutrof"),
+            ("Forgelance", "Forjalanza"),
+            ("Huppermage", "Hipermago"),
+            ("Crâ", "Ocra"),
+            ("Sacrieur", "Sacrógrito"),
+            ("Sacrier", "Sacrógrito"),
+            ("Éliotrope", "Selotrop"),
+            ("Foggernaut", "Steamer"),
+            ("Roublard", "Tymador"),
+            ("Rogue", "Tymador"),
+            ("Ouginak", "Uginak"),
+            ("Iop", "Yopuka"),
+            ("Masqueraider", "Zobal"),
+            ("Écaflip", "Zurcar"),
+            ("Zurcarák", "Zurcar"),
+        ] {
+            let title = format!("Nombre - {foreign} - Dofus 3");
+            assert_eq!(
+                resolve_from_text(&title).map(|c| c.canonical_name),
+                Some(canonical),
+                "{foreign}"
+            );
+        }
     }
 
     #[test]
