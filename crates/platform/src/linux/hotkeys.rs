@@ -32,16 +32,34 @@ pub struct HyprlandHotkeys {
 }
 
 struct BindSpec {
+    /// Legacy `bind` keyword value (Hyprland < 0.56, config-file parser).
     bind_value: String,
+    /// Legacy `unbind` keyword value.
     unbind_value: String,
+    /// Lua statement registering the bind (Hyprland >= 0.56, Lua config).
+    lua_bind: String,
+    /// Lua statement removing the bind.
+    lua_unbind: String,
 }
 
+/// Hyprland 0.56 replaced the config-file parser with Lua: `hyprctl keyword
+/// bind` is rejected with "keyword can't work with non-legacy parsers", and
+/// binds must go through `hyprctl eval` with the `hl` API instead. Try Lua
+/// first and fall back to the keyword form for older compositors.
 fn bind(spec: &BindSpec) -> Result<(), PlatformError> {
+    match super::run_hyprctl(&["eval", &spec.lua_bind]) {
+        Ok(stdout) if stdout.trim() == "ok" => return Ok(()),
+        _ => {}
+    }
     let stdout = super::run_hyprctl(&["keyword", "bind", &spec.bind_value])?;
     super::expect_ok(&format!("bind {}", spec.bind_value), &stdout)
 }
 
 fn unbind(spec: &BindSpec) -> Result<(), PlatformError> {
+    match super::run_hyprctl(&["eval", &spec.lua_unbind]) {
+        Ok(stdout) if stdout.trim() == "ok" => return Ok(()),
+        _ => {}
+    }
     let stdout = super::run_hyprctl(&["keyword", "unbind", &spec.unbind_value])?;
     super::expect_ok(&format!("unbind {}", spec.unbind_value), &stdout)
 }
@@ -67,7 +85,11 @@ impl HyprlandHotkeys {
 
         let handler: Arc<Mutex<Option<HotkeyHandler>>> = Arc::new(Mutex::new(None));
         let running = Arc::new(AtomicBool::new(true));
-        let reader = spawn_reader(fifo_path.clone(), Arc::clone(&handler), Arc::clone(&running));
+        let reader = spawn_reader(
+            fifo_path.clone(),
+            Arc::clone(&handler),
+            Arc::clone(&running),
+        );
 
         Ok(Self {
             fifo_path,
@@ -90,6 +112,8 @@ impl HotkeyBackend for HyprlandHotkeys {
         let spec = BindSpec {
             bind_value: build_bind_value(hotkey, id, &self.fifo_path),
             unbind_value: build_unbind_value(hotkey),
+            lua_bind: build_lua_bind(hotkey, id, &self.fifo_path),
+            lua_unbind: build_lua_unbind(hotkey),
         };
         if !self.suspended {
             bind(&spec)?;
@@ -203,6 +227,32 @@ fn build_unbind_value(hotkey: &Hotkey) -> String {
     format!("{},{}", hypr_mods(hotkey), hypr_key(hotkey))
 }
 
+/// Lua combo string for the `hl` API: `ALT + SHIFT + TAB`.
+fn lua_combo(hotkey: &Hotkey) -> String {
+    let mods = hypr_mods(hotkey);
+    let key = hotkey.key.to_uppercase();
+    if mods.is_empty() {
+        key
+    } else {
+        format!("{} + {}", mods.replace(' ', " + "), key)
+    }
+}
+
+fn build_lua_bind(hotkey: &Hotkey, id: HotkeyId, fifo: &Path) -> String {
+    // Binds stack in Hyprland, so drop any previous bind on the same combo
+    // first (including leftovers from an instance that died without cleanup).
+    let combo = lua_combo(hotkey);
+    format!(
+        "pcall(hl.unbind, \"{combo}\"); hl.bind(\"{combo}\", hl.dsp.exec_cmd(\"sh -c 'echo {} > {}'\"))",
+        id.wire_name(),
+        fifo.display()
+    )
+}
+
+fn build_lua_unbind(hotkey: &Hotkey) -> String {
+    format!("hl.unbind(\"{}\")", lua_combo(hotkey))
+}
+
 fn hypr_mods(hotkey: &Hotkey) -> String {
     let mut parts = Vec::new();
     if hotkey.ctrl {
@@ -232,8 +282,28 @@ mod tests {
     fn mods_render_in_fixed_order() {
         assert_eq!(hypr_mods(&Hotkey::alt("Tab")), "ALT");
         assert_eq!(hypr_mods(&Hotkey::alt_shift("Tab")), "ALT SHIFT");
-        assert_eq!(hypr_mods(&Hotkey::new(true, true, true, true, "k")), "CTRL ALT SHIFT SUPER");
+        assert_eq!(
+            hypr_mods(&Hotkey::new(true, true, true, true, "k")),
+            "CTRL ALT SHIFT SUPER"
+        );
         assert_eq!(hypr_mods(&Hotkey::default()), "");
+    }
+
+    #[test]
+    fn lua_bind_uses_hl_api_with_plus_separated_combo() {
+        let fifo = Path::new("/run/user/1000/dofustabs.fifo");
+        assert_eq!(
+            build_lua_bind(&Hotkey::alt_shift("Tab"), HotkeyId::Previous, fifo),
+            "pcall(hl.unbind, \"ALT + SHIFT + TAB\"); hl.bind(\"ALT + SHIFT + TAB\", hl.dsp.exec_cmd(\"sh -c 'echo previous > /run/user/1000/dofustabs.fifo'\"))"
+        );
+        assert_eq!(
+            build_lua_unbind(&Hotkey::alt("Home")),
+            "hl.unbind(\"ALT + HOME\")"
+        );
+        assert_eq!(
+            lua_combo(&Hotkey::new(false, false, false, false, "f5")),
+            "F5"
+        );
     }
 
     #[test]
@@ -264,6 +334,9 @@ mod tests {
 
     #[test]
     fn unbind_value_matches_bind_prefix() {
-        assert_eq!(build_unbind_value(&Hotkey::alt_shift("Tab")), "ALT SHIFT,tab");
+        assert_eq!(
+            build_unbind_value(&Hotkey::alt_shift("Tab")),
+            "ALT SHIFT,tab"
+        );
     }
 }

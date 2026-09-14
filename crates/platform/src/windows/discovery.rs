@@ -2,8 +2,7 @@
 
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
@@ -37,7 +36,8 @@ impl GameDiscovery for WindowsDiscovery {
 
         // EnumWindows only reports FALSE when the callback aborted the walk;
         // our callback never does, so a FALSE here is a real failure.
-        let ok = unsafe { EnumWindows(Some(enum_callback), &mut ctx as *mut EnumContext as LPARAM) };
+        let ok =
+            unsafe { EnumWindows(Some(enum_callback), &mut ctx as *mut EnumContext as LPARAM) };
         if ok == 0 {
             return Err(PlatformError::CommandFailed(
                 "EnumWindows failed".to_string(),

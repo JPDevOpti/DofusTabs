@@ -44,13 +44,16 @@ fn parse_clients(json: &str) -> Result<Vec<DiscoveredWindow>, PlatformError> {
     let windows = clients
         .into_iter()
         .filter(|c| {
-            c.pid > 0
-                && (is_game_process_name(&c.class) || is_game_process_name(&c.initial_class))
+            c.pid > 0 && (is_game_process_name(&c.class) || is_game_process_name(&c.initial_class))
         })
         .map(|c| DiscoveredWindow {
             pid: c.pid as u32,
             title: c.title,
-            process_name: if c.class.is_empty() { c.initial_class } else { c.class },
+            process_name: if c.class.is_empty() {
+                c.initial_class
+            } else {
+                c.class
+            },
             window_ref: WindowRef::WaylandAddress(c.address),
         })
         .collect();
@@ -128,7 +131,10 @@ mod tests {
         let windows = parse_clients(json).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].title, "Ana - Feca - Dofus");
-        assert_eq!(windows[0].window_ref, WindowRef::WaylandAddress("0x2".to_string()));
+        assert_eq!(
+            windows[0].window_ref,
+            WindowRef::WaylandAddress("0x2".to_string())
+        );
     }
 
     #[test]

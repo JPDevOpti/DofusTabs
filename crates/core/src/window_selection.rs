@@ -114,13 +114,19 @@ mod tests {
             (20, "Beto - Sram - Dofus"),
         ];
         let best = best_per_pid(windows, |w| w.0, |w| w.1);
-        assert_eq!(best, vec![(10, "Ana - Feca - Dofus"), (20, "Beto - Sram - Dofus")]);
+        assert_eq!(
+            best,
+            vec![(10, "Ana - Feca - Dofus"), (20, "Beto - Sram - Dofus")]
+        );
     }
 
     #[test]
     fn ties_prefer_longer_then_first_seen() {
         let windows = vec![(1, "Ana - Feca - Dofus"), (1, "Anabel - Feca - Dofus")];
-        assert_eq!(best_per_pid(windows, |w| w.0, |w| w.1)[0].1, "Anabel - Feca - Dofus");
+        assert_eq!(
+            best_per_pid(windows, |w| w.0, |w| w.1)[0].1,
+            "Anabel - Feca - Dofus"
+        );
 
         let same = vec![(1, "first"), (1, "second"), (1, "seventh")];
         assert_eq!(best_per_pid(same, |w| w.0, |w| w.1)[0].1, "seventh");

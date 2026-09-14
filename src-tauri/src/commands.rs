@@ -4,8 +4,9 @@ use dofustabs_platform::HotkeyId;
 
 use crate::hotkey_dispatch::drain_and_activate;
 use crate::settings_io;
-use crate::watcher;
 use crate::state::{HotkeyView, InstanceView, PlatformHandles, SettingsView, SharedState};
+use crate::watcher;
+use crate::window_layout;
 
 fn emit_instances(app: &AppHandle, views: &[InstanceView]) {
     if let Err(err) = app.emit("instances-changed", views) {
@@ -202,7 +203,9 @@ pub fn set_instance_hotkey(
     pid: u32,
     hotkey: Option<HotkeyView>,
 ) -> Result<(), String> {
-    let hotkey = hotkey.map(HotkeyView::into_core).filter(|hk| !hk.is_empty());
+    let hotkey = hotkey
+        .map(HotkeyView::into_core)
+        .filter(|hk| !hk.is_empty());
 
     let enabled = {
         let mut s = state.0.lock().unwrap();
@@ -235,6 +238,59 @@ pub fn set_hotkeys_suspended(
         Some(backend) => backend.set_suspended(suspended).map_err(|e| e.to_string()),
         None => Ok(()),
     }
+}
+
+/// Toggles compositor-level management of the game windows. Turning it on
+/// stacks every current game window right away; turning it off leaves the
+/// windows where they are.
+#[tauri::command]
+pub fn set_manage_game_windows(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    manage: bool,
+) -> Result<(), String> {
+    state.0.lock().unwrap().settings.manage_game_windows = manage;
+    persist_and_views(&state);
+    if manage {
+        window_layout::arrange_all(&app);
+    }
+    Ok(())
+}
+
+/// Re-applies the stacking to every current game window, including the ones
+/// the user moved by hand since they appeared.
+#[tauri::command]
+pub fn arrange_windows(app: AppHandle) -> Result<(), String> {
+    window_layout::arrange_all(&app);
+    Ok(())
+}
+
+/// Sets the launcher path used by [`launch_game`]; blank clears the
+/// override so the default location applies again.
+#[tauri::command]
+pub fn set_launcher_path(
+    state: State<'_, SharedState>,
+    path: Option<String>,
+) -> Result<SettingsView, String> {
+    state.0.lock().unwrap().set_launcher_path(path);
+    persist_and_views(&state);
+    Ok(state.0.lock().unwrap().settings_view())
+}
+
+/// Starts the game launcher detached from this app, on the dedicated GPU
+/// where the platform supports forcing it. The new client shows up through
+/// the regular discovery scan once its window is mapped.
+#[tauri::command]
+pub fn launch_game(
+    state: State<'_, SharedState>,
+    handles: State<'_, PlatformHandles>,
+) -> Result<(), String> {
+    let path = state.0.lock().unwrap().launcher_path();
+    let guard = handles.launcher.lock().unwrap();
+    let Some(launcher) = guard.as_ref() else {
+        return Err("platform backend unavailable: cannot launch the game".to_string());
+    };
+    launcher.launch(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

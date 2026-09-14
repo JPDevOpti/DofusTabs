@@ -15,12 +15,17 @@ const SEGMENT_SEPARATORS: &[&str] = &["-", "|", "–", "—"];
 
 pub fn parse_title(title: &str) -> ParsedTitle {
     if title.trim().is_empty() {
-        return ParsedTitle { character_name: String::new(), class: None };
+        return ParsedTitle {
+            character_name: String::new(),
+            class: None,
+        };
     }
 
     let segments = split_segments(title);
 
-    let mut class = segments.iter().find_map(|s| game_class::resolve_from_text(s));
+    let mut class = segments
+        .iter()
+        .find_map(|s| game_class::resolve_from_text(s));
     if class.is_none() {
         class = game_class::resolve_from_text(title);
     }
@@ -36,7 +41,10 @@ pub fn parse_title(title: &str) -> ParsedTitle {
         }
     }
 
-    ParsedTitle { character_name: name, class }
+    ParsedTitle {
+        character_name: name,
+        class,
+    }
 }
 
 fn split_segments(title: &str) -> Vec<String> {
@@ -63,7 +71,10 @@ fn is_valid_name_segment(segment: &str, class: Option<&'static GameClass>) -> bo
         return false;
     }
     let normalized = game_class::normalize_text(segment);
-    if IGNORED_TITLE_TOKENS.iter().any(|token| normalized.contains(token)) {
+    if IGNORED_TITLE_TOKENS
+        .iter()
+        .any(|token| normalized.contains(token))
+    {
         return false;
     }
     if let Some(cls) = class {

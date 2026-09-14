@@ -10,12 +10,16 @@ pub fn load(path: &Path) -> AppSettings {
         return AppSettings::default();
     }
 
-    match fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|json| {
-        serde_json::from_str::<AppSettings>(&json).map_err(|e| e.to_string())
-    }) {
+    match fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|json| serde_json::from_str::<AppSettings>(&json).map_err(|e| e.to_string()))
+    {
         Ok(settings) => settings,
         Err(err) => {
-            log::error!("failed to load settings from {}: {err}; using defaults", path.display());
+            log::error!(
+                "failed to load settings from {}: {err}; using defaults",
+                path.display()
+            );
             AppSettings::default()
         }
     }
@@ -64,8 +68,10 @@ mod tests {
     #[test]
     fn roundtrips_settings_through_disk() {
         let path = temp_settings_path("roundtrip");
-        let mut settings = AppSettings::default();
-        settings.primary_character_name = "Ana".to_string();
+        let mut settings = AppSettings {
+            primary_character_name: "Ana".to_string(),
+            ..AppSettings::default()
+        };
         settings.instances.push(InstanceSettings {
             process_id: 42,
             title: "Ana - Feca - Dofus".to_string(),
@@ -84,8 +90,10 @@ mod tests {
     fn keeps_previous_file_as_backup() {
         let path = temp_settings_path("backup");
         let first = AppSettings::default();
-        let mut second = AppSettings::default();
-        second.primary_character_name = "Beto".to_string();
+        let second = AppSettings {
+            primary_character_name: "Beto".to_string(),
+            ..AppSettings::default()
+        };
 
         save(&path, &first).unwrap();
         save(&path, &second).unwrap();

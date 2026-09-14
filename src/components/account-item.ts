@@ -1,4 +1,4 @@
-import type { HotkeyView, InstanceView } from "../ipc";
+import type { GpuKind, HotkeyView, InstanceView } from "../ipc";
 import { createHotkeyCapture } from "./hotkey-capture";
 
 export interface AccountItemHandlers {
@@ -8,6 +8,20 @@ export interface AccountItemHandlers {
   onDragEnd(): void;
   onDropOn(pid: number): void;
   onHotkeyChange(pid: number, hotkey: HotkeyView | null): void;
+}
+
+const GPU_BADGES: Record<Exclude<GpuKind, "unknown">, { label: string; title: string }> = {
+  dedicated: { label: "dGPU", title: "Renderiza en la tarjeta gráfica dedicada" },
+  integrated: { label: "iGPU", title: "Renderiza en la gráfica integrada" },
+};
+
+function createGpuBadge(gpu: GpuKind): HTMLElement | null {
+  if (gpu === "unknown") return null;
+  const badge = document.createElement("span");
+  badge.className = `gpu-badge ${gpu}`;
+  badge.textContent = GPU_BADGES[gpu].label;
+  badge.title = GPU_BADGES[gpu].title;
+  return badge;
 }
 
 export function createAccountItem(
@@ -57,6 +71,9 @@ export function createAccountItem(
     }
   }
   item.appendChild(body);
+
+  const gpuBadge = createGpuBadge(instance.gpu);
+  if (gpuBadge) item.appendChild(gpuBadge);
 
   if (instance.isPrimary) {
     const star = document.createElement("span");

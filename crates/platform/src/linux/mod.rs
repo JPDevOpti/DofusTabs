@@ -1,6 +1,9 @@
+pub mod activator;
 pub mod discovery;
+pub mod gpu;
 pub mod hotkeys;
-pub mod switcher;
+pub mod launcher;
+pub mod window_manager;
 
 use crate::PlatformError;
 use std::process::Command;

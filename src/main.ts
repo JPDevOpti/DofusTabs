@@ -65,6 +65,27 @@ async function bootstrap(): Promise<void> {
       }
       void ipc.setGlobalHotkey(slot, hotkey).catch(report);
     },
+
+    onToggleManageGameWindows: (manage) => {
+      if (state.settings) {
+        state.settings.manageGameWindows = manage;
+        update();
+      }
+      void ipc.setManageGameWindows(manage).catch(report);
+    },
+
+    onArrangeWindows: () => void ipc.arrangeWindows().catch(report),
+
+    onLauncherPathChange: (path) =>
+      void ipc
+        .setLauncherPath(path)
+        .then((settings) => {
+          state.settings = settings;
+          update();
+        })
+        .catch(report),
+
+    onLaunchGame: () => void ipc.launchGame().catch(report),
   });
 
   const update = () =>

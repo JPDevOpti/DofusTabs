@@ -1,12 +1,15 @@
 //! OS-agnostic ports for window discovery, activation, and global hotkeys,
 //! plus per-OS backend implementations behind `cfg` gates.
 
+use dofustabs_core::geometry::Rect;
+use dofustabs_core::gpu::GpuKind;
 use dofustabs_core::settings::Hotkey;
+use std::path::Path;
 use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
-pub mod win_keymap;
+pub mod win32_keymap;
 #[cfg(windows)]
 pub mod windows;
 
@@ -14,7 +17,7 @@ pub mod windows;
 pub use windows::windows_backend;
 
 /// Opaque, backend-specific handle to a top-level window.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowRef {
     Hwnd(isize),
     WaylandAddress(String),
@@ -38,6 +41,8 @@ pub enum PlatformError {
     CommandFailed(String),
     #[error("invalid data: {0}")]
     InvalidData(String),
+    #[error("unsupported on this platform: {0}")]
+    Unsupported(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -67,7 +72,11 @@ impl HotkeyId {
             "next" => Some(Self::Next),
             "previous" => Some(Self::Previous),
             "primary" => Some(Self::Primary),
-            _ => s.strip_prefix("instance:")?.parse().ok().map(Self::Instance),
+            _ => s
+                .strip_prefix("instance:")?
+                .parse()
+                .ok()
+                .map(Self::Instance),
         }
     }
 }
@@ -80,6 +89,28 @@ pub trait GameDiscovery {
 /// Brings a game window to the foreground.
 pub trait WindowActivator {
     fn activate(&self, win: &WindowRef) -> Result<(), PlatformError>;
+}
+
+/// Compositor-level placement of windows: floats game windows, stacks them
+/// on the app's workspace, and keeps the app's own window above them.
+pub trait WindowManager {
+    /// Makes the app's own window float (rule for future maps plus the
+    /// already-mapped window) so it can sit above the game windows, and
+    /// returns a reference to that window for later [`WindowManager::raise`].
+    fn prepare_own_window(&self) -> Result<WindowRef, PlatformError>;
+    /// Floats `win`, moves it to `workspace` without following it, and places
+    /// it at `rect` (absolute logical coordinates and size).
+    fn stack_window(
+        &self,
+        win: &WindowRef,
+        workspace: &str,
+        rect: Rect,
+    ) -> Result<(), PlatformError>;
+    /// Raises `win` in its stacking order without changing keyboard focus.
+    fn raise(&self, win: &WindowRef) -> Result<(), PlatformError>;
+    /// Workspace id the app's own window currently lives on and the usable
+    /// area of that workspace's monitor.
+    fn own_workspace_and_area(&self) -> Result<(String, Rect), PlatformError>;
 }
 
 /// Callback invoked (from a backend-owned thread) when a hotkey fires.
@@ -100,6 +131,19 @@ pub trait HotkeyBackend {
     fn set_suspended(&mut self, suspended: bool) -> Result<(), PlatformError>;
 }
 
+/// Tells which GPU a running process renders on.
+pub trait GpuInspector {
+    /// Best-effort classification for `pid`; `Unknown` when the process has
+    /// not opened any render node yet or cannot be inspected.
+    fn gpu_of(&self, pid: u32) -> Result<GpuKind, PlatformError>;
+}
+
+/// Starts the game launcher detached from this app, forcing the dedicated
+/// GPU where the platform supports it.
+pub trait GameLauncher {
+    fn launch(&self, launcher: &Path) -> Result<(), PlatformError>;
+}
+
 /// True for process/class names that belong to a game client ("Dofus",
 /// "Dofus.x64", "DofusTouch", ...) but not to this app itself.
 pub fn is_game_process_name(name: &str) -> bool {
@@ -107,18 +151,20 @@ pub fn is_game_process_name(name: &str) -> bool {
     n.starts_with("dofus") && !n.starts_with("dofustabs")
 }
 
+/// Everything a platform provides, built together by `*_backend()`.
+pub struct BackendSet {
+    pub discovery: Box<dyn GameDiscovery + Send>,
+    pub activator: Box<dyn WindowActivator + Send>,
+    pub hotkeys: Box<dyn HotkeyBackend + Send>,
+    pub window_manager: Box<dyn WindowManager + Send>,
+    pub gpu: Box<dyn GpuInspector + Send>,
+    pub launcher: Box<dyn GameLauncher + Send>,
+}
+
 /// Builds the backend set for the current Linux session. Only Hyprland
 /// (Wayland) is implemented; other sessions are reported as unsupported.
 #[cfg(target_os = "linux")]
-#[allow(clippy::type_complexity)]
-pub fn linux_backend() -> Result<
-    (
-        Box<dyn GameDiscovery + Send>,
-        Box<dyn WindowActivator + Send>,
-        Box<dyn HotkeyBackend + Send>,
-    ),
-    PlatformError,
-> {
+pub fn linux_backend() -> Result<BackendSet, PlatformError> {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return Err(PlatformError::UnsupportedSession(format!(
@@ -126,11 +172,14 @@ pub fn linux_backend() -> Result<
         )));
     }
 
-    Ok((
-        Box::new(linux::discovery::HyprlandDiscovery::new()),
-        Box::new(linux::switcher::HyprlandActivator::new()),
-        Box::new(linux::hotkeys::HyprlandHotkeys::new()?),
-    ))
+    Ok(BackendSet {
+        discovery: Box::new(linux::discovery::HyprlandDiscovery::new()),
+        activator: Box::new(linux::activator::HyprlandActivator::new()),
+        hotkeys: Box::new(linux::hotkeys::HyprlandHotkeys::new()?),
+        window_manager: Box::new(linux::window_manager::HyprlandWindowManager::new()),
+        gpu: Box::new(linux::gpu::LinuxGpuInspector::new()),
+        launcher: Box::new(linux::launcher::LinuxGameLauncher::new()),
+    })
 }
 
 #[cfg(test)]

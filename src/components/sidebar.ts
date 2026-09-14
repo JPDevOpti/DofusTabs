@@ -1,5 +1,5 @@
 import type { GlobalHotkeySlot, HotkeyView, InstanceView, SettingsView } from "../ipc";
-import { iconUrlFor } from "../icons";
+import { iconUrlFor } from "../class-icons";
 import { createAccountItem, type AccountItemHandlers } from "./account-item";
 import { createSettingsPanel } from "./settings-panel";
 
@@ -20,6 +20,10 @@ export interface SidebarHandlers {
   onSetPrimary(pid: number): void;
   onInstanceHotkeyChange(pid: number, hotkey: HotkeyView | null): void;
   onGlobalHotkeyChange(slot: GlobalHotkeySlot, hotkey: HotkeyView | null): void;
+  onToggleManageGameWindows(manage: boolean): void;
+  onArrangeWindows(): void;
+  onLauncherPathChange(path: string | null): void;
+  onLaunchGame(): void;
 }
 
 export interface Sidebar {
@@ -49,6 +53,12 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
 
   const actions = document.createElement("div");
   actions.className = "topbar-actions";
+  const launchButton = document.createElement("button");
+  launchButton.type = "button";
+  launchButton.className = "icon-btn launch";
+  launchButton.title = "Abrir el launcher de Dofus (GPU dedicada)";
+  launchButton.textContent = "▶";
+  launchButton.addEventListener("click", () => handlers.onLaunchGame());
   const refreshButton = document.createElement("button");
   refreshButton.type = "button";
   refreshButton.className = "icon-btn";
@@ -60,13 +70,16 @@ export function createSidebar(root: HTMLElement, handlers: SidebarHandlers): Sid
   settingsButton.className = "icon-btn";
   settingsButton.title = "Atajos globales";
   settingsButton.textContent = "⚙";
-  actions.append(refreshButton, settingsButton);
+  actions.append(launchButton, refreshButton, settingsButton);
 
   topbar.append(brand, actions);
 
   // Collapsible global hotkeys panel
   const settingsPanel = createSettingsPanel({
     onGlobalHotkeyChange: handlers.onGlobalHotkeyChange,
+    onToggleManageGameWindows: handlers.onToggleManageGameWindows,
+    onArrangeWindows: handlers.onArrangeWindows,
+    onLauncherPathChange: handlers.onLauncherPathChange,
   });
   settingsButton.addEventListener("click", () => settingsPanel.toggle());
 

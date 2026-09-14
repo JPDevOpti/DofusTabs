@@ -152,7 +152,10 @@ mod tests {
 
     #[test]
     fn modifier_flags_combine() {
-        assert_eq!(modifier_flags(&hotkey(false, true, false, false, "x")), MOD_ALT);
+        assert_eq!(
+            modifier_flags(&hotkey(false, true, false, false, "x")),
+            MOD_ALT
+        );
         assert_eq!(
             modifier_flags(&hotkey(true, true, true, true, "x")),
             MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN

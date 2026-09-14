@@ -89,6 +89,11 @@ body {
   border-color: var(--border);
 }
 
+.icon-btn.launch {
+  color: var(--gold);
+  font-size: 13px;
+}
+
 /* ── Global hotkeys panel ────────────────────────────────────────────── */
 
 .settings-panel {
@@ -121,6 +126,70 @@ body {
   align-items: center;
   gap: 10px;
   font-size: 13px;
+}
+
+.settings-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.settings-check:hover {
+  color: var(--text);
+}
+
+.settings-check input {
+  accent-color: var(--gold);
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.settings-btn {
+  justify-self: start;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-btn:hover:not(:disabled) {
+  color: var(--gold);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.settings-input:focus {
+  border-color: var(--gold);
+}
+
+.settings-input::placeholder {
+  color: var(--text-dim);
 }
 
 /* ── Show names toggle ───────────────────────────────────────────────── */
@@ -240,6 +309,29 @@ body {
   color: var(--gold);
   font-size: 13px;
   flex-shrink: 0;
+}
+
+/* GPU badge: gold for the dedicated card, red for the integrated one so a
+   client that silently fell back to the iGPU stands out. */
+.gpu-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  line-height: 1;
+}
+
+.gpu-badge.dedicated {
+  color: var(--gold);
+  background: var(--gold-soft);
+}
+
+.gpu-badge.integrated {
+  color: #e07a7a;
+  background: rgba(224, 122, 122, 0.14);
 }
 
 .account-hotkey {

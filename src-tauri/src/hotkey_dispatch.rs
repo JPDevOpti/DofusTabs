@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use dofustabs_platform::{HotkeyHandler, HotkeyId, WindowRef};
 
 use crate::state::{PlatformHandles, SharedState};
+use crate::window_layout;
 
 /// Builds the callback handed to the platform hotkey backend. It runs on a
 /// backend-owned thread; AppHandle is Send and `emit` is thread-safe, so the
@@ -38,6 +39,9 @@ pub fn drain_and_activate(app: &AppHandle) {
         if !activate_window(app, &window_ref) {
             continue; // target may have just died; the queue may hold more work
         }
+        // The game window is full-size on the same workspace: keep the
+        // switcher visible on top of it (without stealing focus back).
+        window_layout::raise_own_window(app);
 
         let state = app.state::<SharedState>();
         let mut s = state.0.lock().unwrap();

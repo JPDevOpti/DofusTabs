@@ -9,6 +9,9 @@ export interface HotkeyView {
   key: string;
 }
 
+/** Which GPU a client renders on, as far as the platform can tell. */
+export type GpuKind = "dedicated" | "integrated" | "unknown";
+
 export interface InstanceView {
   pid: number;
   characterName: string;
@@ -19,6 +22,7 @@ export interface InstanceView {
   hotkey: HotkeyView | null;
   isPrimary: boolean;
   isActive: boolean;
+  gpu: GpuKind;
 }
 
 export interface SettingsView {
@@ -26,6 +30,9 @@ export interface SettingsView {
   previousHotkey: HotkeyView;
   primaryHotkey: HotkeyView;
   showNames: boolean;
+  manageGameWindows: boolean;
+  /** Effective launcher path (configured or default). */
+  launcherPath: string;
 }
 
 export type GlobalHotkeySlot = "next" | "previous" | "primary";
@@ -58,6 +65,16 @@ export const ipc = {
 
   setHotkeysSuspended: (suspended: boolean): Promise<void> =>
     invoke("set_hotkeys_suspended", { suspended }),
+
+  setManageGameWindows: (manage: boolean): Promise<void> =>
+    invoke("set_manage_game_windows", { manage }),
+
+  arrangeWindows: (): Promise<void> => invoke("arrange_windows"),
+
+  setLauncherPath: (path: string | null): Promise<SettingsView> =>
+    invoke("set_launcher_path", { path }),
+
+  launchGame: (): Promise<void> => invoke("launch_game"),
 };
 
 export function onInstancesChanged(

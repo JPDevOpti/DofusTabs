@@ -1,11 +1,15 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use dofustabs_core::instance::parse_title;
+use dofustabs_core::geometry::Rect;
+use dofustabs_core::gpu::GpuKind;
 use dofustabs_core::rotation::ActivationQueue;
 use dofustabs_core::settings::{AppSettings, Hotkey, InstanceSettings};
+use dofustabs_core::window_title::parse_title;
 use dofustabs_platform::{
-    DiscoveredWindow, GameDiscovery, HotkeyBackend, WindowActivator, WindowRef,
+    DiscoveredWindow, GameDiscovery, GameLauncher, GpuInspector, HotkeyBackend, WindowActivator,
+    WindowManager, WindowRef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +24,8 @@ pub struct TrackedInstance {
     pub enabled: bool,
     pub display_order: i32,
     pub hotkey: Option<Hotkey>,
+    /// GPU the client renders on; `Unknown` until the watcher resolves it.
+    pub gpu: GpuKind,
 }
 
 impl TrackedInstance {
@@ -35,6 +41,7 @@ impl TrackedInstance {
             enabled: true,
             display_order: 0,
             hotkey: None,
+            gpu: GpuKind::Unknown,
         }
     }
 
@@ -49,12 +56,30 @@ impl TrackedInstance {
     }
 }
 
+/// Runtime facts about window placement, resolved once the compositor has
+/// mapped the app's own window (see `window_layout`).
+#[derive(Debug, Default)]
+pub struct LayoutState {
+    /// The app's own window, once prepared; `None` until preparation works.
+    pub own_window: Option<WindowRef>,
+    /// Workspace the app was on when first prepared (startup default).
+    pub startup_workspace: Option<String>,
+    /// Usable area of the app's monitor when first prepared.
+    pub monitor_area: Option<Rect>,
+    /// Game windows already stacked once; the user's later manual moves are
+    /// left alone until an explicit re-arrange.
+    pub arranged: HashSet<WindowRef>,
+}
+
 pub struct AppState {
     pub instances: Vec<TrackedInstance>,
     pub active_pid: Option<u32>,
     pub settings: AppSettings,
     pub queue: ActivationQueue,
     pub settings_path: PathBuf,
+    /// User's home directory, the base for the default launcher path.
+    pub home_dir: PathBuf,
+    pub layout: LayoutState,
 }
 
 pub struct SharedState(pub Mutex<AppState>);
@@ -66,17 +91,67 @@ pub struct PlatformHandles {
     pub discovery: Mutex<Option<Box<dyn GameDiscovery + Send>>>,
     pub activator: Mutex<Option<Box<dyn WindowActivator + Send>>>,
     pub hotkeys: Mutex<Option<Box<dyn HotkeyBackend + Send>>>,
+    pub window_manager: Mutex<Option<Box<dyn WindowManager + Send>>>,
+    pub gpu: Mutex<Option<Box<dyn GpuInspector + Send>>>,
+    pub launcher: Mutex<Option<Box<dyn GameLauncher + Send>>>,
 }
 
 impl AppState {
-    pub fn new(settings: AppSettings, settings_path: PathBuf) -> Self {
+    pub fn new(settings: AppSettings, settings_path: PathBuf, home_dir: PathBuf) -> Self {
         Self {
             instances: Vec::new(),
             active_pid: None,
             settings,
             queue: ActivationQueue::new(),
             settings_path,
+            home_dir,
+            layout: LayoutState::default(),
         }
+    }
+
+    /// Launcher the "launch game" action starts: the configured path, or
+    /// the default AppImage location under the user's home.
+    pub fn launcher_path(&self) -> PathBuf {
+        self.settings.launcher_path_or_default(&self.home_dir)
+    }
+
+    /// Stores the launcher path; blank input clears the override so the
+    /// default applies again.
+    pub fn set_launcher_path(&mut self, path: Option<String>) {
+        self.settings.launcher_path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    }
+
+    /// Pids whose GPU is still unresolved, for the watcher to inspect.
+    pub fn pids_with_unknown_gpu(&self) -> Vec<u32> {
+        self.instances
+            .iter()
+            .filter(|i| i.gpu == GpuKind::Unknown)
+            .map(|i| i.pid)
+            .collect()
+    }
+
+    /// Records the GPU classification for `pid`; true when it changed.
+    pub fn set_gpu(&mut self, pid: u32, gpu: GpuKind) -> bool {
+        match self.instances.iter_mut().find(|i| i.pid == pid) {
+            Some(instance) if instance.gpu != gpu => {
+                instance.gpu = gpu;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Workspace and area the game windows are stacked into: the settings
+    /// override when set, otherwise what was resolved at startup. `None`
+    /// until the own window has been prepared.
+    pub fn game_target(&self) -> Option<(String, Rect)> {
+        let workspace = self
+            .settings
+            .game_workspace
+            .clone()
+            .or_else(|| self.layout.startup_workspace.clone())?;
+        let area = self.settings.game_area.or(self.layout.monitor_area)?;
+        Some((workspace, area))
     }
 
     pub fn enabled_ordered_pids(&self) -> Vec<u32> {
@@ -100,6 +175,7 @@ impl AppState {
                 hotkey: i.hotkey.as_ref().map(HotkeyView::from_core),
                 is_primary: self.is_primary(i),
                 is_active: self.active_pid == Some(i.pid),
+                gpu: i.gpu,
             })
             .collect();
         // Disabled accounts sink to the bottom; the sort is stable so each
@@ -140,7 +216,12 @@ impl AppState {
     /// its own enabled/disabled group. Returns false when it cannot move
     /// (unknown pid or already at the edge of its group).
     pub fn move_instance(&mut self, pid: u32, delta: i32) -> bool {
-        let Some(enabled) = self.instances.iter().find(|i| i.pid == pid).map(|i| i.enabled) else {
+        let Some(enabled) = self
+            .instances
+            .iter()
+            .find(|i| i.pid == pid)
+            .map(|i| i.enabled)
+        else {
             return false;
         };
         let mut order = self.visual_order();
@@ -172,6 +253,8 @@ impl AppState {
             previous_hotkey: HotkeyView::from_core(&self.settings.previous_hotkey),
             primary_hotkey: HotkeyView::from_core(&self.settings.primary_hotkey),
             show_names: self.settings.show_sidebar_names,
+            manage_game_windows: self.settings.manage_game_windows,
+            launcher_path: self.launcher_path().to_string_lossy().into_owned(),
         }
     }
 
@@ -332,6 +415,7 @@ pub struct InstanceView {
     pub hotkey: Option<HotkeyView>,
     pub is_primary: bool,
     pub is_active: bool,
+    pub gpu: GpuKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +425,9 @@ pub struct SettingsView {
     pub previous_hotkey: HotkeyView,
     pub primary_hotkey: HotkeyView,
     pub show_names: bool,
+    pub manage_game_windows: bool,
+    /// Effective launcher path (configured or default).
+    pub launcher_path: String,
 }
 
 #[cfg(test)]
@@ -357,7 +444,11 @@ mod tests {
     }
 
     fn state_with(instances: Vec<TrackedInstance>) -> AppState {
-        let mut state = AppState::new(AppSettings::default(), PathBuf::from("/tmp/unused.json"));
+        let mut state = AppState::new(
+            AppSettings::default(),
+            PathBuf::from("/tmp/unused.json"),
+            PathBuf::from("/home/ana"),
+        );
         state.instances = instances;
         state
     }
@@ -367,7 +458,10 @@ mod tests {
         let mut instances = Vec::new();
         let outcome = sync_instances(
             &mut instances,
-            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+            ],
             &[],
         );
 
@@ -384,7 +478,10 @@ mod tests {
         let mut instances = Vec::new();
         sync_instances(
             &mut instances,
-            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+            ],
             &[],
         );
         instances[0].enabled = false;
@@ -412,7 +509,11 @@ mod tests {
         }];
 
         let mut instances = Vec::new();
-        sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus")], &persisted);
+        sync_instances(
+            &mut instances,
+            &[discovered(10, "Ana - Feca - Dofus")],
+            &persisted,
+        );
 
         assert!(!instances[0].enabled);
         assert_eq!(instances[0].display_order, 3);
@@ -430,7 +531,11 @@ mod tests {
         }];
 
         let mut instances = Vec::new();
-        sync_instances(&mut instances, &[discovered(10, "Ana - Feca - Dofus 3.0")], &persisted);
+        sync_instances(
+            &mut instances,
+            &[discovered(10, "Ana - Feca - Dofus 3.0")],
+            &persisted,
+        );
 
         assert!(!instances[0].enabled);
         assert_eq!(instances[0].display_order, 5);
@@ -464,7 +569,10 @@ mod tests {
         let mut instances = Vec::new();
         sync_instances(
             &mut instances,
-            &[discovered(10, "Ana - Feca - Dofus"), discovered(20, "Beto - Sram - Dofus")],
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+            ],
             &[],
         );
         instances[0].display_order = 1;
@@ -522,7 +630,14 @@ mod tests {
 
         state.apply_order(&[30, 10]);
 
-        let order = |pid: u32| state.instances.iter().find(|i| i.pid == pid).unwrap().display_order;
+        let order = |pid: u32| {
+            state
+                .instances
+                .iter()
+                .find(|i| i.pid == pid)
+                .unwrap()
+                .display_order
+        };
         assert_eq!(order(30), 0);
         assert_eq!(order(10), 1);
         assert_eq!(order(20), 2);
@@ -569,15 +684,97 @@ mod tests {
             icon_file: None,
             enabled: true,
             display_order: 0,
-            hotkey: Some(HotkeyView::from_core(&Hotkey::new(false, false, false, true, "F1"))),
+            hotkey: Some(HotkeyView::from_core(&Hotkey::new(
+                false, false, false, true, "F1",
+            ))),
             is_primary: false,
             is_active: true,
+            gpu: GpuKind::Dedicated,
         };
 
         let json = serde_json::to_value(&view).unwrap();
         assert!(json.get("characterName").is_some());
         assert!(json.get("isActive").is_some());
         assert!(json["hotkey"].get("superKey").is_some());
+        assert_eq!(json["gpu"], "dedicated");
+    }
+
+    #[test]
+    fn gpu_starts_unknown_and_only_reports_real_changes() {
+        let mut instances = Vec::new();
+        sync_instances(
+            &mut instances,
+            &[
+                discovered(10, "Ana - Feca - Dofus"),
+                discovered(20, "Beto - Sram - Dofus"),
+            ],
+            &[],
+        );
+        let mut state = state_with(instances);
+        assert_eq!(state.pids_with_unknown_gpu(), vec![10, 20]);
+
+        assert!(state.set_gpu(10, GpuKind::Dedicated));
+        assert!(!state.set_gpu(10, GpuKind::Dedicated));
+        assert!(!state.set_gpu(999, GpuKind::Integrated));
+        assert_eq!(state.pids_with_unknown_gpu(), vec![20]);
+        assert_eq!(state.to_views()[0].gpu, GpuKind::Dedicated);
+
+        // A rescan keeps the resolved GPU for surviving pids.
+        let persisted = state.settings.instances.clone();
+        sync_instances(
+            &mut state.instances,
+            &[discovered(10, "Ana - Feca - Dofus")],
+            &persisted,
+        );
+        assert_eq!(state.instances[0].gpu, GpuKind::Dedicated);
+    }
+
+    #[test]
+    fn launcher_path_falls_back_to_default_and_blank_clears_override() {
+        let mut state = state_with(Vec::new());
+        assert_eq!(
+            state.launcher_path(),
+            PathBuf::from("/home/ana/Applications/Dofus.AppImage")
+        );
+        assert_eq!(
+            state.settings_view().launcher_path,
+            "/home/ana/Applications/Dofus.AppImage"
+        );
+
+        state.set_launcher_path(Some("  /opt/Dofus.AppImage ".to_string()));
+        assert_eq!(
+            state.settings.launcher_path.as_deref(),
+            Some("/opt/Dofus.AppImage")
+        );
+        assert_eq!(state.launcher_path(), PathBuf::from("/opt/Dofus.AppImage"));
+
+        state.set_launcher_path(Some("   ".to_string()));
+        assert_eq!(state.settings.launcher_path, None);
+        state.set_launcher_path(None);
+        assert_eq!(
+            state.launcher_path(),
+            PathBuf::from("/home/ana/Applications/Dofus.AppImage")
+        );
+    }
+
+    #[test]
+    fn game_target_prefers_settings_over_startup_values() {
+        let mut state = state_with(Vec::new());
+        assert_eq!(state.game_target(), None);
+
+        state.layout.startup_workspace = Some("2".to_string());
+        state.layout.monitor_area = Some(Rect::new(0, 0, 1920, 1080));
+        assert_eq!(
+            state.game_target(),
+            Some(("2".to_string(), Rect::new(0, 0, 1920, 1080)))
+        );
+
+        state.settings.game_workspace = Some("5".to_string());
+        state.settings.game_area = Some(Rect::new(10, 10, 100, 100));
+        assert_eq!(
+            state.game_target(),
+            Some(("5".to_string(), Rect::new(10, 10, 100, 100)))
+        );
     }
 
     #[test]

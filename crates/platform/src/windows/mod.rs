@@ -7,23 +7,26 @@
 
 pub mod activator;
 pub mod discovery;
+pub mod gpu;
 pub mod hotkeys;
+pub mod launcher;
+pub mod window_manager;
 
-use crate::{GameDiscovery, HotkeyBackend, PlatformError, WindowActivator};
+use crate::BackendSet;
+use gpu::WindowsGpuInspector;
+use launcher::WindowsGameLauncher;
+use window_manager::WindowsWindowManager;
+
+use crate::PlatformError;
 
 /// Builds the backend set for Windows.
-#[allow(clippy::type_complexity)]
-pub fn windows_backend() -> Result<
-    (
-        Box<dyn GameDiscovery + Send>,
-        Box<dyn WindowActivator + Send>,
-        Box<dyn HotkeyBackend + Send>,
-    ),
-    PlatformError,
-> {
-    Ok((
-        Box::new(discovery::WindowsDiscovery::new()),
-        Box::new(activator::WindowsActivator::new()),
-        Box::new(hotkeys::WindowsHotkeys::new()?),
-    ))
+pub fn windows_backend() -> Result<BackendSet, PlatformError> {
+    Ok(BackendSet {
+        discovery: Box::new(discovery::WindowsDiscovery::new()),
+        activator: Box::new(activator::WindowsActivator::new()),
+        hotkeys: Box::new(hotkeys::WindowsHotkeys::new()?),
+        window_manager: Box::new(WindowsWindowManager),
+        gpu: Box::new(WindowsGpuInspector),
+        launcher: Box::new(WindowsGameLauncher),
+    })
 }

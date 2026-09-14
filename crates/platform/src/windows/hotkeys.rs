@@ -22,7 +22,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use dofustabs_core::settings::Hotkey;
 
-use crate::win_keymap::{self, MOD_NOREPEAT};
+use crate::win32_keymap::{self, MOD_NOREPEAT};
 use crate::{HotkeyBackend, HotkeyHandler, HotkeyId, PlatformError};
 
 /// Stable Win32 hotkey ids: fixed ones for the global slots, a counter-based
@@ -78,11 +78,9 @@ impl WindowsHotkeys {
 
         // The worker signals readiness only after creating its message queue;
         // posting to the thread before that would fail.
-        let worker_thread_id = ready_rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| {
-                PlatformError::CommandFailed("hotkey message loop failed to start".to_string())
-            })?;
+        let worker_thread_id = ready_rx.recv_timeout(Duration::from_secs(5)).map_err(|_| {
+            PlatformError::CommandFailed("hotkey message loop failed to start".to_string())
+        })?;
 
         Ok(Self {
             worker: Some(worker),
@@ -175,8 +173,11 @@ impl HotkeyBackend for WindowsHotkeys {
             return Ok(()); // empty hotkey = clear only
         }
 
-        let (modifiers, vk) = win_keymap::map_hotkey(hotkey).ok_or_else(|| {
-            PlatformError::InvalidData(format!("key '{}' has no Win32 virtual-key code", hotkey.key))
+        let (modifiers, vk) = win32_keymap::map_hotkey(hotkey).ok_or_else(|| {
+            PlatformError::InvalidData(format!(
+                "key '{}' has no Win32 virtual-key code",
+                hotkey.key
+            ))
         })?;
 
         let win_id = self.win_id_for(id);
@@ -253,7 +254,13 @@ fn message_loop(
         // A thread only gets a message queue after its first message API
         // call; force creation before publishing our thread id.
         let mut msg: MSG = std::mem::zeroed();
-        PeekMessageW(&mut msg, std::ptr::null_mut(), WM_USER, WM_USER, PM_NOREMOVE);
+        PeekMessageW(
+            &mut msg,
+            std::ptr::null_mut(),
+            WM_USER,
+            WM_USER,
+            PM_NOREMOVE,
+        );
         if ready_tx.send(GetCurrentThreadId()).is_err() {
             return;
         }

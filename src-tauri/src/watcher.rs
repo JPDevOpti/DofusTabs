@@ -2,9 +2,11 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use dofustabs_platform::{DiscoveredWindow, HotkeyId, PlatformError};
+use dofustabs_core::gpu::GpuKind;
+use dofustabs_platform::{DiscoveredWindow, HotkeyId, PlatformError, WindowRef};
 
 use crate::state::{sync_instances, PlatformHandles, SharedState};
+use crate::window_layout;
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -49,13 +51,52 @@ pub fn scan_now(app: &AppHandle) -> Result<(), PlatformError> {
     Ok(())
 }
 
+/// Classifies the GPU of each pid through the platform inspector. Only
+/// resolved kinds are returned; `Unknown` (client not rendering yet) and
+/// inspection errors are retried on the next scan.
+fn inspect_gpus(app: &AppHandle, pids: &[u32]) -> Vec<(u32, GpuKind)> {
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let handles = app.state::<PlatformHandles>();
+    let guard = handles.gpu.lock().unwrap();
+    let Some(inspector) = guard.as_ref() else {
+        return Vec::new();
+    };
+    pids.iter()
+        .filter_map(|&pid| match inspector.gpu_of(pid) {
+            Ok(GpuKind::Unknown) => None,
+            Ok(kind) => Some((pid, kind)),
+            Err(err) => {
+                log::debug!("gpu inspection failed for pid {pid}: {err}");
+                None
+            }
+        })
+        .collect()
+}
+
 fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
     let state = app.state::<SharedState>();
-    let mut s = state.0.lock().unwrap();
+    let (outcome, unresolved) = {
+        let mut s = state.0.lock().unwrap();
+        let persisted = s.settings.instances.clone();
+        let outcome = sync_instances(&mut s.instances, windows, &persisted);
+        (outcome, s.pids_with_unknown_gpu())
+    };
 
-    let persisted = s.settings.instances.clone();
-    let outcome = sync_instances(&mut s.instances, windows, &persisted);
-    if !outcome.changed {
+    // GPU classification reads /proc; keep it outside the state lock and
+    // respect the lock order (state, then platform — never nested).
+    let resolved = inspect_gpus(app, &unresolved);
+
+    let mut s = state.0.lock().unwrap();
+    let mut changed = outcome.changed;
+    for (pid, gpu) in resolved {
+        if s.set_gpu(pid, gpu) {
+            log::info!("pid {pid} renders on the {} GPU", gpu.wire_name());
+            changed = true;
+        }
+    }
+    if !changed {
         return;
     }
 
@@ -74,7 +115,21 @@ fn apply_scan(app: &AppHandle, windows: &[DiscoveredWindow]) {
         .filter_map(|i| i.hotkey.clone().map(|hk| (i.pid, hk)))
         .collect();
     let views = s.to_views();
+    let to_stack: Vec<WindowRef> = if s.settings.manage_game_windows {
+        s.instances
+            .iter()
+            .filter(|i| outcome.appeared.contains(&i.pid))
+            .map(|i| i.window_ref.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     drop(s);
+
+    // New game windows are stacked once; later manual moves are respected.
+    if !to_stack.is_empty() {
+        window_layout::stack_windows(app, &to_stack, false);
+    }
 
     let handles = app.state::<PlatformHandles>();
     let mut hotkeys = handles.hotkeys.lock().unwrap();

@@ -4,35 +4,28 @@ mod settings_io;
 mod state;
 mod tray;
 mod watcher;
+mod window_layout;
 
 use std::sync::Mutex;
 
 use tauri::{Manager, WindowEvent};
 
-use dofustabs_platform::{
-    GameDiscovery, HotkeyBackend, HotkeyId, PlatformError, WindowActivator,
-};
+use dofustabs_platform::{BackendSet, HotkeyId, PlatformError};
 
 use state::{AppState, PlatformHandles, SharedState};
 
-type Backend = (
-    Box<dyn GameDiscovery + Send>,
-    Box<dyn WindowActivator + Send>,
-    Box<dyn HotkeyBackend + Send>,
-);
-
 #[cfg(target_os = "linux")]
-fn create_backend() -> Result<Backend, PlatformError> {
+fn create_backend() -> Result<BackendSet, PlatformError> {
     dofustabs_platform::linux_backend()
 }
 
 #[cfg(windows)]
-fn create_backend() -> Result<Backend, PlatformError> {
+fn create_backend() -> Result<BackendSet, PlatformError> {
     dofustabs_platform::windows_backend()
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn create_backend() -> Result<Backend, PlatformError> {
+fn create_backend() -> Result<BackendSet, PlatformError> {
     Err(PlatformError::UnsupportedSession(
         "no platform backend implemented for this OS yet".to_string(),
     ))
@@ -56,6 +49,10 @@ pub fn run() {
             commands::set_instance_hotkey,
             commands::set_show_names,
             commands::set_hotkeys_suspended,
+            commands::set_manage_game_windows,
+            commands::arrange_windows,
+            commands::set_launcher_path,
+            commands::launch_game,
         ])
         .setup(|app| {
             let settings_path = match app.path().app_config_dir() {
@@ -66,14 +63,33 @@ pub fn run() {
                 }
             };
 
+            let home_dir = match app.path().home_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    log::error!("no home dir ({err}); default launcher path will be relative");
+                    std::path::PathBuf::new()
+                }
+            };
+
             let settings = settings_io::load(&settings_path);
-            app.manage(SharedState(Mutex::new(AppState::new(settings, settings_path))));
+            app.manage(SharedState(Mutex::new(AppState::new(
+                settings,
+                settings_path,
+                home_dir,
+            ))));
             app.manage(PlatformHandles::default());
 
             tray::setup(app.handle())?;
 
             match create_backend() {
-                Ok((discovery, activator, mut hotkeys)) => {
+                Ok(BackendSet {
+                    discovery,
+                    activator,
+                    mut hotkeys,
+                    window_manager,
+                    gpu,
+                    launcher,
+                }) => {
                     hotkeys.set_handler(hotkey_dispatch::make_handler(app.handle().clone()));
 
                     {
@@ -94,6 +110,13 @@ pub fn run() {
                     *handles.discovery.lock().unwrap() = Some(discovery);
                     *handles.activator.lock().unwrap() = Some(activator);
                     *handles.hotkeys.lock().unwrap() = Some(hotkeys);
+                    *handles.window_manager.lock().unwrap() = Some(window_manager);
+                    *handles.gpu.lock().unwrap() = Some(gpu);
+                    *handles.launcher.lock().unwrap() = Some(launcher);
+
+                    // Best effort: the own window may not be mapped yet, in
+                    // which case the watcher retries on later scans.
+                    window_layout::ensure_prepared(app.handle());
 
                     watcher::start(app.handle().clone());
                 }
