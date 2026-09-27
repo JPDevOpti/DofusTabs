@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/core", "crates/platform"]
+members = ["crates/core", "crates/platform", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,5 +16,4 @@ thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
 unicode-normalization = "0.1"
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-build = { version = "2", features = [] }
+clap = { version = "4", features = ["derive"] }

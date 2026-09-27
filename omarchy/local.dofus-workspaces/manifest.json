@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "local.dofus-workspaces",
+  "name": "Dofus Workspaces",
+  "version": "1.0.0",
+  "author": "local",
+  "description": "One icon per running Dofus client, with F-key slot switching",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Dofus Workspaces",
+    "description": "Icons for running Dofus clients",
+    "category": "Compositor",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}

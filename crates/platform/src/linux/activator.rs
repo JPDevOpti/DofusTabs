@@ -17,11 +17,7 @@ impl Default for HyprlandActivator {
 
 impl WindowActivator for HyprlandActivator {
     fn activate(&self, win: &WindowRef) -> Result<(), PlatformError> {
-        let WindowRef::WaylandAddress(address) = win else {
-            return Err(PlatformError::InvalidData(
-                "Hyprland activator requires a Wayland address".to_string(),
-            ));
-        };
+        let WindowRef::WaylandAddress(address) = win;
 
         // Hyprland >= 0.56 exposes dispatchers through the Lua `hl` API and
         // rejects the legacy `dispatch focuswindow` form; try Lua first and

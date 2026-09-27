@@ -1,78 +1,186 @@
 # DofusTabs
 
-Gestor de multicuenta para Dofus: detecta los clientes del juego abiertos, muestra una sidebar con cada personaje (icono de clase incluido) y permite cambiar de cuenta con un clic o con atajos de teclado globales.
+Isolated Dofus game workspaces for Hyprland: every game client gets its own
+workspace (11-19), the Omarchy bar shows one icon per running account, and
+`F1`/`F2`/`F3` switch between clients and back to the desktop.
 
-Reescritura multiplataforma en **Rust + Tauri 2** del DofusTabs original (C#/WPF, solo Windows).
+See [`docs/WORKSPACES.md`](docs/WORKSPACES.md) for the full design.
 
-## Estado por plataforma
+## Requirements
 
-| Plataforma | Estado |
-|---|---|
-| Linux (Hyprland/Wayland) | Funcional y verificado |
-| Windows | Implementado; compilación pendiente de verificar en un equipo Windows |
-| Otros compositores Wayland / X11 | No soportado (ver Roadmap) |
+- Hyprland with the Lua config format (`~/.config/hypr/hyprland.lua`).
+- The Omarchy shell (`omarchy-bar`, `~/.config/omarchy/shell.json`).
+- Rust to build the CLI.
 
-## Arquitectura
-
-Hexagonal (ports & adapters), tres capas Rust + frontend:
-
-```
-crates/core       Dominio puro: parseo de títulos (window_title.rs), clases,
-                  rotación, settings. Sin dependencias de OS ni de Tauri.
-                  Testeado al 100 % en unit tests.
-crates/platform   Ports (traits GameDiscovery, WindowActivator, HotkeyBackend,
-                  WindowManager, GpuInspector, GameLauncher) y adapters por OS:
-                    linux/    hyprctl (discovery, activator.rs con focuswindow,
-                              hotkeys con binds + FIFO, ventanas flotantes),
-                              /proc + DRM (gpu.rs), launcher con PRIME render
-                              offload
-                    windows/  EnumWindows (discovery.rs), SetForegroundWindow
-                              (activator.rs), RegisterHotKey (hotkeys.rs vía
-                              win32_keymap.rs), gpu.rs/launcher.rs/
-                              window_manager.rs (stubs "unsupported")
-src-tauri         Orquestación: comandos IPC, watcher de procesos (1 s) que
-                  también resuelve la GPU de cada cliente, despacho de hotkeys,
-                  layout de ventanas, persistencia atómica de settings.
-src/              Frontend vanilla TypeScript + CSS (sin frameworks).
-```
-
-La regla de dependencias: `core` no depende de nadie; `platform` depende de `core`; `src-tauri` cablea ambos. Portar a otra plataforma = escribir un adapter nuevo.
-
-## Desarrollo
-
-Requisitos: Rust estable, Node 20+, y en Linux `webkit2gtk-4.1`.
+## Install
 
 ```sh
-npm install
-./run.sh               # desarrollo con recarga en caliente (equivale a npm run tauri dev)
-npm run tauri build    # binario de release
-cargo test --workspace # suite completa de Rust
-npm run build          # verificación del frontend
+git clone <this repo>
+cd dofustabs
+./install.sh
 ```
 
-## Atajos por defecto
+This builds the `dofustabs` binary in release mode, installs it to
+`~/.local/bin/dofustabs`, and runs `dofustabs install`, which:
 
-- Siguiente cuenta: `Alt+Tab` · Anterior: `Alt+Shift+Tab` · Principal: `Alt+Home`
-- Configurables desde el panel de ajustes; cada cuenta admite un atajo directo propio.
+- writes `~/.config/hypr/dofustabs.lua` (the Hyprland module),
+- adds a guarded loader block to `~/.config/hypr/hyprland.lua` (only if not
+  already present),
+- installs the bar widget to `~/.config/omarchy/plugins/local.dofus-workspaces/`
+  and registers it in the bar layout (`omarchy bar put`, only if not already
+  registered),
+- installs the class icons to `~/.local/share/dofustabs/icons/`,
+- creates `~/.config/dofustabs/accounts.json` and the generated
+  `accounts.lua` if they do not exist yet,
+- reloads Hyprland.
 
-En Linux los atajos se registran como binds de Hyprland mientras la app corre y se eliminan al cerrarla. Cerrar la app con `SIGKILL` omite esa limpieza (los binds quedan hasta recargar Hyprland).
+Every config file the installer touches is backed up first, as
+`<file>.bak.<unix-timestamp>`. Installing is idempotent: running it again
+only touches what actually changed.
 
-## Ventanas y GPU (Linux/Hyprland)
+## First run
 
-- La ventana de DofusTabs no tiene decoraciones y al arrancar se vuelve flotante y se convierte en una columna de 64 px a toda la altura del área útil del monitor donde abrió; los juegos se apilan a su derecha; mientras el panel de ajustes o el menú de una cuenta están abiertos la ventana se ensancha temporalmente para mostrarlos.
-- Con "Gestionar ventanas del juego" activo, cada cliente nuevo se une a un grupo nativo de Hyprland (pestañas del compositor) en el workspace donde estaba DofusTabs al arrancar; la app reserva una columna de 64 px en ese monitor para que el grupo nunca tape la sidebar y la libera al salir; activar una cuenta (atajo o clic) muestra su pestaña. Recomendación: usar un workspace vacío para los juegos, porque el grupo comparte el espacio con las demás ventanas tileadas del workspace. "Reorganizar ventanas" re-aplica el layout a todas.
-- No se usa el fullscreen del compositor a propósito: con `misc:on_focus_under_fullscreen = 1` (valor por defecto en Omarchy) Hyprland lo quitaría cada vez que un cliente del juego recibe el foco.
-- Cada cuenta muestra un badge `dGPU` (NVIDIA) o `iGPU` (integrada) según los nodos DRM que el proceso tiene abiertos. Sin badge = todavía no renderiza.
-- El botón ▶ abre el Ankama Launcher con las variables PRIME (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, ...) para que el juego use la dedicada. La ruta por defecto es `~/Applications/Dofus.AppImage`, configurable en ajustes.
+Open one or more Dofus clients. Each one is placed on its own workspace
+(11, 12, 13, ...) without stealing focus, and shows up in the bar as a
+generic icon. **Right click a client's icon** to label it: a popup lists the
+19 classes (icon + name) plus "Clear class"; picking one labels the account's
+currently active character (or the account itself, if no character has been
+resolved for it yet). Left click still just focuses that client's workspace.
 
-## Configuración
+The icon's tooltip on an unlabelled client says "`<label>` - right click to
+choose the class", so first-run discoverability doesn't depend on reading
+this file.
 
-Se guarda en el directorio de configuración de la app (`~/.config/com.dofustabs.app/settings.json` en Linux) con escritura atómica y copia `.bak`.
+The same thing can be done from the terminal:
 
-## Roadmap
+```sh
+$ dofustabs status
+SLOT  WORKSPACE   ACCOUNT        NAME             CLASS        CHARACTER  PID
+1     11          190231219      Account 190231219              a2902bb7  245681
+  -> ACTIVE character not labelled yet: dofustabs character set --account 190231219 --name <name> --class <class>
 
-- Verificación de compilación del backend Windows (`cargo check --workspace` en un equipo Windows).
-- Hotkeys vía portal XDG GlobalShortcuts, junto con discovery/activación específicos, para compositores Wayland distintos de Hyprland.
-- Soporte X11.
-- Embedding de la ventana del juego (estilo original de Windows) como feature opcional.
-- Inspección de GPU y launcher en Windows (hoy son stubs que reportan `unknown`/`unsupported`).
+$ dofustabs character set --account 190231219 --name Anabel --class feca
+updated character a2902bb789f8805dd2396ba8c89c906a for account 190231219
+```
+
+`--class` accepts aliases, any case, and the French/English name too
+(`iop`, `Iop`, `Yopuka` all resolve to the canonical `Yopuka`). The bar and
+`dofustabs status` update immediately; no reload needed. `--clear-name` /
+`--clear-class` unset a field again (on `character set` and `accounts set`).
+
+### How character detection works, and its honest limit
+
+**The game never tells this tool a character's name or class.** On Linux
+every client window is titled exactly `Dofus`, with no character info in it
+(verified live; see docs/WORKSPACES.md). So the class has to be told once,
+per character, the way described above — there is no way around asking.
+
+What this tool *can* detect automatically is **which character is currently
+active** in each running client, so that the name/class you set follows the
+right character across logouts and re-logins instead of staying pinned to
+whichever character happened to be active when you labelled the account.
+Every ~10 seconds (and right after a client opens or closes), `dofustabs
+identify` looks at each client's per-character save file under
+`~/.config/unity3d/Ankama/Dofus/<RELEASE>/Accounts/<account>/Characters/<hash>/`
+and picks whichever one was written to most recently, but only if that is
+*after* the client itself started — so a character last played in a previous
+session is never mistaken for the one currently active. `dofustabs character
+set` (with no `--character`) and the bar picker both target this
+automatically-resolved active character.
+
+### Primary class: always slot 1
+
+If you have one character you use to lead groups (a support/enhancer class
+you want in a predictable spot regardless of which accounts happen to be
+running), set it once:
+
+```sh
+dofustabs primary set selotrop
+```
+
+From then on, whichever running client's *active* character has that class
+always gets slot 1 (workspace 11), overriding any other account's own
+`--slot` preference for slot 1 specifically (their preference for every
+other slot is unaffected). If two running clients both have the primary
+class at once, the lowest account id gets slot 1 and the other is treated as
+having no preference at all. `dofustabs primary clear` / `dofustabs primary
+show` manage and inspect it.
+
+Optionally pin an account to a slot so it always lands on the same
+workspace:
+
+```sh
+dofustabs accounts set 190231219 --slot 1
+```
+
+## Keys
+
+| Key | From the desktop | From a game workspace |
+| --- | --- | --- |
+| F1 | Last game workspace used | Previous occupied game workspace |
+| F2 | Last game workspace used | Next occupied game workspace |
+| F3 | Nothing | Last desktop workspace used |
+
+The three keys are only bound while at least one client is running.
+
+Optional: if your personal Hyprland config uses `e+1`/`e-1` scroll binds for
+desktop workspace navigation, point them at `dofustabs.desktop_step(1)` /
+`dofustabs.desktop_step(-1)` instead of the relative-workspace dispatcher, so
+scrolling never walks into a game workspace:
+
+```lua
+-- in your own bindings.lua, replacing the relative-workspace bind:
+hl.bind("SUPER, mouse_down", function() dofustabs.desktop_step(1) end)
+hl.bind("SUPER, mouse_up", function() dofustabs.desktop_step(-1) end)
+```
+
+`dofustabs install`/`uninstall` never edit `bindings.lua` themselves.
+
+## Commands
+
+```
+dofustabs accounts list
+dofustabs accounts set <account-id> [--name <text>] [--class <class>] [--slot <1-9>] [--clear-name] [--clear-class]
+dofustabs accounts remove <account-id>
+dofustabs character set --account <id> [--character <hash>] [--name <text>] [--class <class>] [--clear-name] [--clear-class]
+dofustabs character list
+dofustabs character remove --account <id> --character <hash>
+dofustabs character from-title --account <id> --title <title>   # internal; used by the Hyprland module
+dofustabs primary set <class> | clear | show
+dofustabs identify [--dry-run]   # internal; polled automatically every ~10s
+dofustabs status
+dofustabs doctor
+dofustabs install
+dofustabs uninstall
+dofustabs launch
+dofustabs quit [--keep-launcher] [--dry-run]
+```
+
+`dofustabs quit` closes every running game client (asking the compositor to
+close the window first, then escalating to `SIGTERM` and finally `SIGKILL`
+for any client that does not exit) and, unless `--keep-launcher` is given,
+the Ankama launcher too. The bar's cog button exposes it as "Close all
+accounts and launcher" (a second click within 4 seconds confirms it).
+
+## Removed
+
+The background CPU limit (a per-client `systemd` `CPUQuota` applied while a
+client's workspace was not shown on any monitor) was removed: capping CPU
+slowed the game logic of background accounts, not only their rendering.
+
+## Troubleshooting
+
+Run `dofustabs doctor`. It checks Hyprland reachability, whether the module
+and widget on disk match this binary's embedded copies, the loader block, the
+bar layout, `hyprctl configerrors`, the icons, the state file, and the
+F1/F2/F3 binds (present iff a client is running). Exits non-zero if any
+check fails.
+
+## Uninstall
+
+```sh
+./install.sh --uninstall
+```
+
+Reverses everything `install` did (module, loader block, widget, bar entry,
+icons) and removes the `dofustabs` binary. `accounts.json` is kept.

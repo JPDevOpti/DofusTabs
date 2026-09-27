@@ -88,6 +88,25 @@ impl LinuxGpuInspector {
             fs::read_to_string(self.pci_devices_root.join(pci_address).join("vendor")).ok()?;
         parse_vendor(&raw)
     }
+
+    /// Classifies `pid` using an already-built node-to-PCI map, instead of
+    /// re-reading `/dev/dri/by-path` per pid.
+    fn gpu_of_with_map(
+        &self,
+        pid: u32,
+        by_node: &HashMap<String, String>,
+    ) -> Result<GpuKind, PlatformError> {
+        let nodes = self.opened_drm_nodes(pid)?;
+        if nodes.is_empty() {
+            return Ok(GpuKind::Unknown);
+        }
+        let vendors: Vec<u32> = nodes
+            .iter()
+            .filter_map(|node| by_node.get(node))
+            .filter_map(|address| self.vendor_of(address))
+            .collect();
+        Ok(classify(&vendors))
+    }
 }
 
 impl Default for LinuxGpuInspector {
@@ -98,17 +117,15 @@ impl Default for LinuxGpuInspector {
 
 impl GpuInspector for LinuxGpuInspector {
     fn gpu_of(&self, pid: u32) -> Result<GpuKind, PlatformError> {
-        let nodes = self.opened_drm_nodes(pid)?;
-        if nodes.is_empty() {
-            return Ok(GpuKind::Unknown);
-        }
         let by_node = self.node_to_pci();
-        let vendors: Vec<u32> = nodes
-            .iter()
-            .filter_map(|node| by_node.get(node))
-            .filter_map(|address| self.vendor_of(address))
-            .collect();
-        Ok(classify(&vendors))
+        self.gpu_of_with_map(pid, &by_node)
+    }
+
+    fn gpu_of_many(&self, pids: &[u32]) -> Vec<(u32, Result<GpuKind, PlatformError>)> {
+        let by_node = self.node_to_pci();
+        pids.iter()
+            .map(|&pid| (pid, self.gpu_of_with_map(pid, &by_node)))
+            .collect()
     }
 }
 

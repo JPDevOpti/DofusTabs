@@ -1,7 +1,9 @@
+pub mod client_identity;
 pub mod game_class;
-pub mod geometry;
 pub mod gpu;
-pub mod rotation;
-pub mod settings;
+pub mod identify;
+pub mod md5;
+pub mod quit;
+pub mod slot;
 pub mod window_selection;
 pub mod window_title;

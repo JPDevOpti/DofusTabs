@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>DofusTabs</title>
+  <!-- DofusTabs app icon: three stacked account cards on the app's dark
+       surface; the front card carries the switcher's gold accent. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c2030"/>
+      <stop offset="1" stop-color="#0f1117"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#efd98f"/>
+      <stop offset="1" stop-color="#c9b061"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2f40"/>
+      <stop offset="1" stop-color="#202430"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect x="14" y="14" width="996" height="996" rx="212" fill="none" stroke="#363c4d" stroke-width="12"/>
+
+  <!-- back cards, offset up and to the right -->
+  <rect x="332" y="176" width="440" height="560" rx="56" fill="url(#card)" stroke="#3d4459" stroke-width="10"/>
+  <rect x="272" y="236" width="440" height="560" rx="56" fill="url(#card)" stroke="#48506a" stroke-width="10"/>
+
+  <!-- front card -->
+  <rect x="212" y="296" width="440" height="560" rx="56" fill="url(#gold)"/>
+  <!-- account glyph: head and shoulders -->
+  <circle cx="432" cy="486" r="86" fill="#171a22"/>
+  <path d="M272 760c0-92 72-160 160-160s160 68 160 160v8H272z" fill="#171a22"/>
+  <!-- active marker -->
+  <circle cx="600" cy="352" r="26" fill="#171a22"/>
+  <circle cx="600" cy="352" r="14" fill="#efd98f"/>
+</svg>
